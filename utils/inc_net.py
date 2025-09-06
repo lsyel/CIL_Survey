@@ -9,7 +9,7 @@ from convs.ucir_resnet import resnet18 as cosine_resnet18
 from convs.ucir_resnet import resnet34 as cosine_resnet34
 from convs.ucir_resnet import resnet50 as cosine_resnet50
 from convs.linears import SimpleLinear, SplitCosineLinear, CosineLinear
-
+from convs.my_resnet import ResNet34 as my_resnet34
 # FOR MEMO
 from convs.memo_resnet import  get_resnet18_imagenet as get_memo_resnet18 #for imagenet
 from convs.memo_cifar_resnet import get_resnet32_a2fc as get_memo_resnet32 #for cifar
@@ -40,6 +40,8 @@ from convs.memo_resnet import get_resnet50_imagenet as memo_resnet50_imagenet
 
 def get_convnet(convnet_type, pretrained=False):
     name = convnet_type.lower()
+    if name == "my_resnet34":
+        return my_resnet34(num_c=19)
     if name == "resnet32":
         return resnet32()
     elif name == "resnet18":
