@@ -41,7 +41,7 @@ from convs.memo_resnet import get_resnet50_imagenet as memo_resnet50_imagenet
 def get_convnet(convnet_type, pretrained=False):
     name = convnet_type.lower()
     if name == "my_resnet34":
-        return my_resnet34(num_c=20)
+        return my_resnet34(num_c=19)
     if name == "resnet32":
         return resnet32()
     elif name == "resnet18":
