@@ -41,7 +41,7 @@ from convs.memo_resnet import get_resnet50_imagenet as memo_resnet50_imagenet
 def get_convnet(convnet_type, pretrained=False):
     name = convnet_type.lower()
     if name == "my_resnet34":
-        return my_resnet34(num_c=19)
+        return my_resnet34(num_c=1,use_moe=True)
     if name == "resnet32":
         return resnet32()
     elif name == "resnet18":
@@ -185,9 +185,12 @@ class BaseNet(nn.Module):
         return test_acc
 
 class IncrementalNet(BaseNet):
-    def __init__(self, convnet_type, pretrained, gradcam=False):
+    def __init__(self, convnet_type, pretrained, gradcam=False, use_moe=True):
         super().__init__(convnet_type, pretrained)
         self.gradcam = gradcam
+        self.use_moe = True  # 👈 新增：是否使用 MoE
+        self._cur_task = 0      # 👈 新增：记录当前任务 ID
+
         if hasattr(self, "gradcam") and self.gradcam:
             self._gradcam_hooks = [None, None]
             self.set_gradcam_hook()
@@ -216,22 +219,52 @@ class IncrementalNet(BaseNet):
 
     def generate_fc(self, in_dim, out_dim):
         fc = SimpleLinear(in_dim, out_dim)
-
         return fc
 
-    def forward(self, x):
-        x = self.convnet(x)
+    # 👇👇👇 核心修改：支持 MoE 专家扩展
+    def update_moe_experts(self, task_id):
+        """
+        当开始新任务时调用，扩展 MoE 专家数量。
+        假设每个任务对应一个专家。
+        """
+        if not self.use_moe:
+            return
+
+        # 获取当前 convnet 中的 moe_layer
+        if hasattr(self.convnet, 'moe_layer') and self.convnet.moe_layer is not None:
+            current_experts = self.convnet.moe_layer.num_experts
+            if task_id + 1 > current_experts:
+                print(f"🔧 Expanding MoE experts from {current_experts} to {task_id + 1}")
+                self.convnet.moe_layer.expand_experts(task_id + 1)
+        else:
+            print("⚠️ MoE layer not found in convnet. Did you initialize with use_moe=True?")
+
+    def forward(self, x, task_id=None):
+        """
+        :param x: 输入图像
+        :param task_id: 可选，当前任务 ID，用于 MoE 路由控制
+        """
+        # 👇 传入 task_id 给 convnet（ResNet with MoE）
+        if self.use_moe:
+            x = self.convnet(x, task_id=task_id)
+        else:
+            x = self.convnet(x)
+
         out = self.fc(x["features"])
-        out.update(x)
+        out.update(x)  # 保留 fmaps, features 等
+
         if hasattr(self, "gradcam") and self.gradcam:
             out["gradcam_gradients"] = self._gradcam_gradients
             out["gradcam_activations"] = self._gradcam_activations
 
         return out
 
+    # ========== Grad-CAM Hooks (保持不变) ==========
     def unset_gradcam_hook(self):
-        self._gradcam_hooks[0].remove()
-        self._gradcam_hooks[1].remove()
+        if self._gradcam_hooks[0] is not None:
+            self._gradcam_hooks[0].remove()
+        if self._gradcam_hooks[1] is not None:
+            self._gradcam_hooks[1].remove()
         self._gradcam_hooks[0] = None
         self._gradcam_hooks[1] = None
         self._gradcam_gradients, self._gradcam_activations = [None], [None]
@@ -247,13 +280,12 @@ class IncrementalNet(BaseNet):
             self._gradcam_activations[0] = output
             return None
 
-        self._gradcam_hooks[0] = self.convnet.last_conv.register_backward_hook(
-            backward_hook
-        )
-        self._gradcam_hooks[1] = self.convnet.last_conv.register_forward_hook(
-            forward_hook
-        )
-
+        # 假设你的 convnet 有 last_conv 属性（如 ResNet 最后一个卷积层）
+        if hasattr(self.convnet, 'last_conv'):
+            self._gradcam_hooks[0] = self.convnet.last_conv.register_backward_hook(backward_hook)
+            self._gradcam_hooks[1] = self.convnet.last_conv.register_forward_hook(forward_hook)
+        else:
+            print("⚠️ last_conv not found in convnet for Grad-CAM.")
 
 class CosineIncrementalNet(BaseNet):
     def __init__(self, convnet_type, pretrained, nb_proxy=1):
