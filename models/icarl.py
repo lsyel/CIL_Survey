@@ -148,7 +148,7 @@ class iCaRL(BaseLearner):
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
 
                 # 👇 传入 task_id 控制 MoE 路由
-                output = self._network(inputs, task_id=self._cur_task)
+                output = self._network(inputs, task_id=None)
                 logits = output["logits"]
 
                 loss = F.cross_entropy(logits, targets)
@@ -194,9 +194,13 @@ class iCaRL(BaseLearner):
             correct, total = 0, 0
             for i, (_, inputs, targets) in enumerate(train_loader):
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
-
+                # 👇 课程学习：前80%强制路由，后20%自动路由
+                if epoch < int(epochs * 0.8):
+                    task_id_for_train = self._cur_task
+                else:
+                    task_id_for_train = None  # 自动路由
                 # 👇 传入当前 task_id，控制 MoE 路由到当前任务专家
-                output = self._network(inputs, task_id=self._cur_task)
+                output = self._network(inputs, task_id=task_id_for_train)
                 logits = output["logits"]
 
                 # 分类损失
@@ -205,7 +209,7 @@ class iCaRL(BaseLearner):
                 # 蒸馏损失（旧类别部分）
                 if self._old_network is not None:
                     with torch.no_grad():
-                        old_output = self._old_network(inputs, task_id=0)  # 👈 也传 task_id
+                        old_output = self._old_network(inputs, None)  # 👈 也传 task_id
                     loss_kd = _KD_loss(
                         logits[:, : self._known_classes],
                         old_output["logits"],
@@ -257,7 +261,7 @@ class iCaRL(BaseLearner):
         for i, (_, inputs, targets) in enumerate(self.test_loader):
             inputs = inputs.to(self._device)
             with torch.no_grad():
-                outputs = self._network(inputs, task_id=self._cur_task)
+                outputs = self._network(inputs, task_id=None)
                 logits = outputs["logits"]  # 👈 获取 logits
                 cnn_logits_list.append(logits.cpu().numpy())  # 👈 保存 logits
             cnn_preds = torch.max(logits, dim=1)[1]
@@ -293,7 +297,7 @@ class iCaRL(BaseLearner):
             inputs = inputs.to(device)
             with torch.no_grad():
                 # 👇 评估时传入当前任务 ID（也可设为 None）
-                outputs = model(inputs, task_id=self._cur_task)
+                outputs = model(inputs, task_id=None)
                 logits = outputs["logits"]
             predicts = torch.max(logits, dim=1)[1]
             correct += (predicts.cpu() == targets).sum()
