@@ -11,6 +11,6 @@
     "convnet_type": "my_resnet34_moe",
     "device": ["0"],
     "seed": [1993],
-    "use_moe": true,
+    "use_moe": 1
 }
 

@@ -20,7 +20,7 @@ init_milestones = [60, 120, 170]
 init_lr_decay = 0.1
 init_weight_decay = 0.0005
 
-epochs = 30
+epochs = 20
 lrate = 0.1
 milestones = [80, 120]
 lrate_decay = 0.1
@@ -272,7 +272,7 @@ class iCaRLMoe(BaseLearner):
         cnn_logits_all = np.vstack(cnn_logits_list)  # 👈 合并 logits
 
         # 👇 传入 4 个参数：pred, true, logits, known_classes
-        cnn_accy = self._evaluate(cnn_pred_all, cnn_target_all, cnn_logits_all, self._known_classes)
+        cnn_accy = self._evaluate(cnn_pred_all, cnn_target_all, cnn_logits_all, self._total_classes)
 
         nme_accy = None
 
@@ -304,7 +304,7 @@ class iCaRLMoe(BaseLearner):
         return np.around(tensor2numpy(correct) * 100 / total, decimals=2)
 
     # 👇 必须缩进在 class iCaRL 下面！
-    def _evaluate(self, y_pred, y_true, y_logits, known_classes):
+    def _evaluate(self, y_pred, y_true, y_logits, total_classes):
         """
         使用 logits 计算 top1, top3
         """
@@ -325,10 +325,10 @@ class iCaRLMoe(BaseLearner):
         # ===== Grouped =====
         grouped = {}
         task_size = self.args["increment"]
-        for i in range(0, known_classes, task_size):
+        for i in range(0, total_classes, task_size):
             mask = (y_true >= i) & (y_true < i + task_size)
             if mask.any():
-                grouped[f"{i}-{i+task_size}"] = (y_pred[mask] == y_true[mask]).mean()
+                grouped[f"{i:0>2d}-{i+task_size-1:0>2d}"] = (y_pred[mask] == y_true[mask]).mean()
         ret["grouped"] = grouped
 
         return ret

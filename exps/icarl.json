@@ -1,15 +1,15 @@
 {
-    "prefix": "reproduce",
-    "dataset": "cifar100",
-    "memory_size": 2000,
-    "memory_per_class": 20,
+    "prefix": "benchmark",
+    "dataset": "ustc2016",
+    "memory_size": 20000,
+    "memory_per_class": 1000,
     "fixed_memory": false,
     "shuffle": true,
-    "init_cls": 10,
-    "increment": 10,
+    "init_cls": 4,
+    "increment": 4,
     "model_name": "icarl",
-    "convnet_type": "resnet32",
-    "device": ["0","1","2","3"],
+    "convnet_type": "my_resnet34",
+    "device": ["0"],
     "seed": [1993]
 }
 
