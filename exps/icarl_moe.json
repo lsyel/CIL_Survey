@@ -1,0 +1,16 @@
+{
+    "prefix": "benchmark",
+    "dataset": "ustc2016",
+    "memory_size": 20000,
+    "memory_per_class":1000,
+    "fixed_memory": false,
+    "shuffle": true,
+    "init_cls": 4,
+    "increment": 4,
+    "model_name": "icarl_moe",
+    "convnet_type": "my_resnet34_moe",
+    "device": ["0"],
+    "seed": [1993],
+    "use_moe": true,
+}
+

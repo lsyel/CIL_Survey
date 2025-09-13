@@ -5,6 +5,7 @@ from models.finetune import Finetune
 from models.foster import FOSTER
 from models.gem import GEM
 from models.icarl import iCaRL
+from models.icarl_moe import iCaRLMoe
 from models.lwf import LwF
 from models.replay import Replay
 from models.bic import BiC
@@ -17,6 +18,8 @@ def get_model(model_name, args):
     name = model_name.lower()
     if name == "icarl":
         return iCaRL(args)
+    elif name == "icarl_moe":
+        return iCaRLMoe(args)
     elif name == "bic":
         return BiC(args)
     elif name == "podnet":
