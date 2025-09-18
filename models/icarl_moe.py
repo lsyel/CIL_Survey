@@ -190,46 +190,60 @@ class iCaRLMoe(BaseLearner):
             self._network.train()
             losses = 0.0
             correct, total = 0, 0
+            
             for i, (_, inputs, targets) in enumerate(train_loader):
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
-                # 👇 课程学习：前80%强制路由，后20%自动路由
-                if epoch < int(epochs * 0.8):
-                    task_id_for_train = self._cur_task
+                
+                # ===== 核心修改：改进的路由策略 =====
+                # 第一阶段：混合路由（前50%的epoch）
+                if epoch < int(epochs * 0.5):
+                    # 50%概率强制路由到当前专家，50%自动路由
+                    if torch.rand(1) > 0.5:
+                        task_id_for_train = self._cur_task
+                    else:
+                        task_id_for_train = None
+                        
+                # 第二阶段：自动路由（50%之后的epoch）
                 else:
-                    task_id_for_train = None  # 自动路由
-                # 👇 传入当前 task_id，控制 MoE 路由到当前任务专家
+                    task_id_for_train = None
+                
+                # ===== 前向传播 =====
                 output = self._network(inputs, task_id=task_id_for_train)
                 logits = output["logits"]
-
+                
+                # ===== 损失计算 =====
                 # 分类损失
                 loss_clf = F.cross_entropy(logits, targets)
-
+                
                 # 蒸馏损失（旧类别部分）
                 if self._old_network is not None:
                     with torch.no_grad():
-                        old_output = self._old_network(inputs, None)  # 👈 也传 task_id
-                    loss_kd = _KD_loss(
-                        logits[:, : self._known_classes],
-                        old_output["logits"],
-                        T,
-                    )
+                        old_output = self._old_network(inputs, None)
+                    # 只蒸馏旧类别部分
+                    old_logits = old_output["logits"][:, :self._known_classes]
+                    current_old_logits = logits[:, :self._known_classes]
+                    loss_kd = _KD_loss(current_old_logits, old_logits, T)
                 else:
                     loss_kd = 0
-
+                    
                 loss = loss_clf + loss_kd
-
+                
+                # ===== 反向传播 =====
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
                 losses += loss.item()
-
+                
+                # ===== 统计准确率 =====
                 _, preds = torch.max(logits, dim=1)
                 correct += preds.eq(targets.expand_as(preds)).cpu().sum()
                 total += len(targets)
-
+            
+            # ===== 更新学习率 =====
             scheduler.step()
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
-
+            
+            # ===== 日志记录 =====
             if epoch % 5 == 0:
                 test_acc = self._compute_accuracy(self._network, test_loader)
                 info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}, Test_accy {:.2f}".format(
@@ -249,7 +263,7 @@ class iCaRLMoe(BaseLearner):
                     train_acc,
                 )
             prog_bar.set_description(info)
-
+        
         logging.info(info)
 
     def eval_task(self, save_conf=False):
