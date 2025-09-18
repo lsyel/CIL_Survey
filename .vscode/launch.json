@@ -74,6 +74,33 @@
                 "20000",
             ]
         },
+        {
+            "name": "icarl_ustc_moe",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "stopOnEntry": true,
+            "justMyCode": false,
+            "args": [
+                "--dataset",
+                "ustc2016",
+                "-model",
+                "icarl_moe",
+                "-net",
+                "my_resnet34_moe",
+                "-init",
+                "5",
+                "-incre",
+                "5",
+                "-p",
+                "benchmark",
+                "-d",
+                "0",
+                "--memory_size",
+                "20000",
+            ]
+        },
 
     ]
 }
