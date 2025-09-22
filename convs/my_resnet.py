@@ -197,7 +197,7 @@ class ResNet(nn.Module):
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
-    def forward(self, x, task_id=None):
+    def forward(self, x, task_id=None,routing_targets=None):
         out = F.relu(self.bn1(self.conv1(x)))
         out1 = self.layer1(out)
         out2 = self.layer2(out1)
@@ -206,18 +206,24 @@ class ResNet(nn.Module):
 
         pooled = F.avg_pool2d(out4, 4)
         features = pooled.view(pooled.size(0), -1)  # (B, D)
-
-        # 👇 插入 MoE 层
+        
         if self.use_moe and self.moe_layer is not None:
-            features = self.moe_layer(features, task_id=task_id)
-
-        # logits = self.linear(features)
-
+            moe_output = self.moe_layer(features, task_id=task_id, routing_targets=routing_targets)
+            features = moe_output["output"]
+            # 返回 MoE 输出信息
+            return {
+            "fmaps": [out1, out2, out3, out4],
+            "features": features,
+            "routing_loss": moe_output.get("routing_loss", 0),
+            "gate_logits": moe_output.get("gate_logits"),
+            "expert_assignments": moe_output.get("expert_assignments")
+        }
         return {
             "fmaps": [out1, out2, out3, out4],
             "features": features,
             # "logits": logits  # 保持与之前一致的输出格式
         }
+
 
     # ========== 以下为兼容旧接口的方法 ==========
     def feature_list(self, x):

@@ -188,15 +188,11 @@ class BaseNet(nn.Module):
         return test_acc
 
 class IncrementalNet(BaseNet):
-    def __init__(self, convnet_type, pretrained, gradcam=False, use_moe=False):
+    def __init__(self, convnet_type, pretrained, use_moe=False):
         super().__init__(convnet_type, pretrained)
-        self.gradcam = gradcam
         self.use_moe = use_moe  # 👈 新增：是否使用 MoE
         self._cur_task = 0      # 👈 新增：记录当前任务 ID
 
-        if hasattr(self, "gradcam") and self.gradcam:
-            self._gradcam_hooks = [None, None]
-            self.set_gradcam_hook()
 
     def update_fc(self, nb_classes):
         fc = self.generate_fc(self.feature_dim, nb_classes)
@@ -242,53 +238,28 @@ class IncrementalNet(BaseNet):
         else:
             print("⚠️ MoE layer not found in convnet. Did you initialize with use_moe=True?")
 
-    def forward(self, x, task_id=None):
+    def forward(self, x, task_id=None,routing_targets=None):
         """
         :param x: 输入图像
         :param task_id: 可选，当前任务 ID，用于 MoE 路由控制
         """
         # 👇 传入 task_id 给 convnet（ResNet with MoE）
         if self.use_moe:
-            x = self.convnet(x, task_id=task_id)
+            x = self.convnet(x, task_id=task_id,routing_targets = routing_targets)
         else:
             x = self.convnet(x)
 
         out = self.fc(x["features"])
         out.update(x)  # 保留 fmaps, features 等
 
-        if hasattr(self, "gradcam") and self.gradcam:
-            out["gradcam_gradients"] = self._gradcam_gradients
-            out["gradcam_activations"] = self._gradcam_activations
+
+        # 添加路由损失到输出
+        if "routing_loss" in x:
+            out["routing_loss"] = x["routing_loss"]
+        
 
         return out
 
-    # ========== Grad-CAM Hooks (保持不变) ==========
-    def unset_gradcam_hook(self):
-        if self._gradcam_hooks[0] is not None:
-            self._gradcam_hooks[0].remove()
-        if self._gradcam_hooks[1] is not None:
-            self._gradcam_hooks[1].remove()
-        self._gradcam_hooks[0] = None
-        self._gradcam_hooks[1] = None
-        self._gradcam_gradients, self._gradcam_activations = [None], [None]
-
-    def set_gradcam_hook(self):
-        self._gradcam_gradients, self._gradcam_activations = [None], [None]
-
-        def backward_hook(module, grad_input, grad_output):
-            self._gradcam_gradients[0] = grad_output[0]
-            return None
-
-        def forward_hook(module, input, output):
-            self._gradcam_activations[0] = output
-            return None
-
-        # 假设你的 convnet 有 last_conv 属性（如 ResNet 最后一个卷积层）
-        if hasattr(self.convnet, 'last_conv'):
-            self._gradcam_hooks[0] = self.convnet.last_conv.register_backward_hook(backward_hook)
-            self._gradcam_hooks[1] = self.convnet.last_conv.register_forward_hook(forward_hook)
-        else:
-            print("⚠️ last_conv not found in convnet for Grad-CAM.")
 
 
 class CosineIncrementalNet(BaseNet):

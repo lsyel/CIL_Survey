@@ -10,7 +10,7 @@ import os
 from models.base import BaseLearner
 from utils.inc_net import IncrementalNet  # 确保它支持 use_moe 和 update_moe_experts
 from utils.toolkit import target2onehot, tensor2numpy
-
+import random
 EPSILON = 1e-8
 
 # ========== 超参数 ==========
@@ -37,7 +37,6 @@ class iCaRLMoe(BaseLearner):
         self._network = IncrementalNet(
             args["convnet_type"],
             False,
-            gradcam=False,
             use_moe=True
         )
         self._cur_task = -1  # 初始化为 -1，第一个任务变成 0
@@ -189,27 +188,37 @@ class iCaRLMoe(BaseLearner):
         for _, epoch in enumerate(prog_bar):
             self._network.train()
             losses = 0.0
+            routing_losses = 0.0  # 单独记录路由损失
             correct, total = 0, 0
+            
+            # 获取任务大小（每个任务的类别数）
+            task_size = self.args["increment"]
             
             for i, (_, inputs, targets) in enumerate(train_loader):
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
                 
-                # ===== 核心修改：改进的路由策略 =====
-                # 第一阶段：混合路由（前50%的epoch）
-                if epoch < int(epochs * 0.5):
-                    # 50%概率强制路由到当前专家，50%自动路由
-                    if torch.rand(1) > 0.5:
-                        task_id_for_train = self._cur_task
-                    else:
-                        task_id_for_train = None
-                        
-                # 第二阶段：自动路由（50%之后的epoch）
-                else:
-                    task_id_for_train = None
+                # ===== 计算路由目标 =====
+                routing_targets = torch.zeros_like(targets, device=self._device)
+                
+                # 新样本（当前任务）：应该路由到新专家
+                new_sample_mask = (targets >= self._known_classes)
+                routing_targets[new_sample_mask] = self._cur_task
+                
+                # 回放样本（旧样本）：应该路由到旧专家
+                replay_mask = (targets < self._known_classes)
+                if replay_mask.any() and self._cur_task > 0:
+                    # 计算样本的原始任务ID
+                    task_origin = targets // task_size
+                    
+                    # 确保任务ID在有效范围内 [0, self._cur_task-1]
+                    task_origin = torch.clamp(task_origin, 0, self._cur_task - 1)
+                    
+                    routing_targets[replay_mask] = task_origin[replay_mask]
                 
                 # ===== 前向传播 =====
-                output = self._network(inputs, task_id=task_id_for_train)
+                output = self._network(inputs, task_id=None, routing_targets=routing_targets)
                 logits = output["logits"]
+                routing_loss = output.get("routing_loss", 0)  # 获取路由损失
                 
                 # ===== 损失计算 =====
                 # 分类损失
@@ -219,52 +228,62 @@ class iCaRLMoe(BaseLearner):
                 if self._old_network is not None:
                     with torch.no_grad():
                         old_output = self._old_network(inputs, None)
-                    # 只蒸馏旧类别部分
                     old_logits = old_output["logits"][:, :self._known_classes]
                     current_old_logits = logits[:, :self._known_classes]
                     loss_kd = _KD_loss(current_old_logits, old_logits, T)
                 else:
                     loss_kd = 0
-                    
-                loss = loss_clf + loss_kd
+                
+                # 主损失（分类 + 蒸馏）
+                main_loss = loss_clf + loss_kd
+                
+                # 路由损失权重
+                routing_loss_weight = 0.1
                 
                 # ===== 反向传播 =====
                 optimizer.zero_grad()
-                loss.backward()
+                
+                # 1. 先计算主损失的梯度
+                main_loss.backward(retain_graph=True)  # 保留计算图以便后续计算路由损失
+                
+                # 2. 再计算路由损失的梯度
+                weighted_routing_loss = routing_loss_weight * routing_loss
+                weighted_routing_loss.backward()
+                
+                # 3. 更新参数
                 optimizer.step()
-                losses += loss.item()
+                
+                # ===== 记录损失 =====
+                losses += main_loss.item()
+                routing_losses += weighted_routing_loss.item()
                 
                 # ===== 统计准确率 =====
                 _, preds = torch.max(logits, dim=1)
                 correct += preds.eq(targets.expand_as(preds)).cpu().sum()
                 total += len(targets)
+                
+                if random.random() < 0.01:
+                    logging.info(f"Main loss: {main_loss.item():.4f}, Routing loss: {weighted_routing_loss.item():.4f}")
             
             # ===== 更新学习率 =====
             scheduler.step()
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
             
+            # ===== 计算测试准确率 =====
+            test_acc = self._compute_accuracy(self._network, test_loader)
+            
             # ===== 日志记录 =====
-            if epoch % 5 == 0:
-                test_acc = self._compute_accuracy(self._network, test_loader)
-                info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}, Test_accy {:.2f}".format(
-                    self._cur_task,
-                    epoch + 1,
-                    epochs,
-                    losses / len(train_loader),
-                    train_acc,
-                    test_acc,
-                )
-            else:
-                info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
-                    self._cur_task,
-                    epoch + 1,
-                    epochs,
-                    losses / len(train_loader),
-                    train_acc,
-                )
+            info = "Task {}, Epoch {}/{} => Main Loss {:.3f}, Routing Loss {:.3f}, Train_accy {:.2f}, Test_accy {:.2f}".format(
+                self._cur_task,
+                epoch + 1,
+                epochs,
+                losses / len(train_loader),
+                routing_losses / len(train_loader),
+                train_acc,
+                test_acc,
+            )
             prog_bar.set_description(info)
-        
-        logging.info(info)
+            logging.info(info)
 
     def eval_task(self, save_conf=False):
         cnn_pred_list, cnn_target_list, cnn_logits_list = [], [], []  # 👈 新增 logits 列表
