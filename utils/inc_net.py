@@ -10,6 +10,7 @@ from convs.ucir_resnet import resnet34 as cosine_resnet34
 from convs.ucir_resnet import resnet50 as cosine_resnet50
 from convs.linears import SimpleLinear, SplitCosineLinear, CosineLinear
 from convs.my_resnet import ResNet34 as my_resnet34
+
 # FOR MEMO
 from convs.memo_resnet import  get_resnet18_imagenet as get_memo_resnet18 #for imagenet
 from convs.memo_cifar_resnet import get_resnet32_a2fc as get_memo_resnet32 #for cifar
@@ -42,7 +43,9 @@ def get_convnet(convnet_type, pretrained=False):
     name = convnet_type.lower()
     if name == "my_resnet34":
         return my_resnet34(num_c=19)
-    if name == "resnet32":
+    elif name =="my_resnet34_moe":
+        return my_resnet34(num_c=1,use_moe=True,moe_experts=1)
+    elif name == "resnet32":
         return resnet32()
     elif name == "resnet18":
         return resnet18(pretrained=pretrained)
@@ -185,12 +188,11 @@ class BaseNet(nn.Module):
         return test_acc
 
 class IncrementalNet(BaseNet):
-    def __init__(self, convnet_type, pretrained, gradcam=False):
+    def __init__(self, convnet_type, pretrained, use_moe=False):
         super().__init__(convnet_type, pretrained)
-        self.gradcam = gradcam
-        if hasattr(self, "gradcam") and self.gradcam:
-            self._gradcam_hooks = [None, None]
-            self.set_gradcam_hook()
+        self.use_moe = use_moe  # 👈 新增：是否使用 MoE
+        self._cur_task = 0      # 👈 新增：记录当前任务 ID
+
 
     def update_fc(self, nb_classes):
         fc = self.generate_fc(self.feature_dim, nb_classes)
@@ -216,43 +218,48 @@ class IncrementalNet(BaseNet):
 
     def generate_fc(self, in_dim, out_dim):
         fc = SimpleLinear(in_dim, out_dim)
-
         return fc
 
-    def forward(self, x):
-        x = self.convnet(x)
+    # 👇👇👇 核心修改：支持 MoE 专家扩展
+    def update_moe_experts(self, task_id):
+        """
+        当开始新任务时调用，扩展 MoE 专家数量。
+        假设每个任务对应一个专家。
+        """
+        if not self.use_moe:
+            return
+
+        # 获取当前 convnet 中的 moe_layer
+        if hasattr(self.convnet, 'moe_layer') and self.convnet.moe_layer is not None:
+            current_experts = self.convnet.moe_layer.num_experts
+            if task_id + 1 > current_experts:
+                print(f"🔧 Expanding MoE experts from {current_experts} to {task_id + 1}")
+                self.convnet.moe_layer.expand_experts(task_id + 1)
+        else:
+            print("⚠️ MoE layer not found in convnet. Did you initialize with use_moe=True?")
+
+    def forward(self, x, task_id=None,routing_targets=None):
+        """
+        :param x: 输入图像
+        :param task_id: 可选，当前任务 ID，用于 MoE 路由控制
+        """
+        # 👇 传入 task_id 给 convnet（ResNet with MoE）
+        if self.use_moe:
+            x = self.convnet(x, task_id=task_id,routing_targets = routing_targets)
+        else:
+            x = self.convnet(x)
+
         out = self.fc(x["features"])
-        out.update(x)
-        if hasattr(self, "gradcam") and self.gradcam:
-            out["gradcam_gradients"] = self._gradcam_gradients
-            out["gradcam_activations"] = self._gradcam_activations
+        out.update(x)  # 保留 fmaps, features 等
+
+
+        # 添加路由损失到输出
+        if "routing_loss" in x:
+            out["routing_loss"] = x["routing_loss"]
+        
 
         return out
 
-    def unset_gradcam_hook(self):
-        self._gradcam_hooks[0].remove()
-        self._gradcam_hooks[1].remove()
-        self._gradcam_hooks[0] = None
-        self._gradcam_hooks[1] = None
-        self._gradcam_gradients, self._gradcam_activations = [None], [None]
-
-    def set_gradcam_hook(self):
-        self._gradcam_gradients, self._gradcam_activations = [None], [None]
-
-        def backward_hook(module, grad_input, grad_output):
-            self._gradcam_gradients[0] = grad_output[0]
-            return None
-
-        def forward_hook(module, input, output):
-            self._gradcam_activations[0] = output
-            return None
-
-        self._gradcam_hooks[0] = self.convnet.last_conv.register_backward_hook(
-            backward_hook
-        )
-        self._gradcam_hooks[1] = self.convnet.last_conv.register_forward_hook(
-            forward_hook
-        )
 
 
 class CosineIncrementalNet(BaseNet):

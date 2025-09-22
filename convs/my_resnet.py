@@ -1,4 +1,4 @@
-"""ResNet in PyTorch.
+"""ResNet in PyTorch with MoE Support.
 BasicBlock and Bottleneck module is from the original ResNet paper:
 [1] Kaiming He, Xiangyu Zhang, Shaoqing Ren, Jian Sun
     Deep Residual Learning for Image Recognition. arXiv:1512.03385
@@ -6,14 +6,13 @@ PreActBlock and PreActBottleneck module is from the later paper:
 [2] Kaiming He, Xiangyu Zhang, Shaoqing Ren, Jian Sun
     Identity Mappings in Deep Residual Networks. arXiv:1603.05027
 Original code is from https://github.com/kuangliu/pytorch-cifar/blob/master/models/resnet.py
+Modified to support MoE layer for incremental learning.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.autograd import Variable
-from torch.nn.parameter import Parameter
-
+from utils.moe import MoELayer
 
 def conv3x3(in_planes, out_planes, stride=1):
     return nn.Conv2d(
@@ -161,10 +160,15 @@ class PreActBottleneck(nn.Module):
         return out
 
 
+
+
+
+# ============= ResNet with MoE =============
 class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=10):
+    def __init__(self, block, num_blocks, num_classes=10, use_moe=True, moe_experts=1):
         super(ResNet, self).__init__()
         self.in_planes = 64
+        self.use_moe = use_moe
 
         self.conv1 = conv3x3(3, 64)
         self.bn1 = nn.BatchNorm2d(64)
@@ -172,8 +176,18 @@ class ResNet(nn.Module):
         self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
-        self.linear = nn.Linear(512 * block.expansion, num_classes)
+
+        # self.linear = nn.Linear(512 * block.expansion, num_classes)
         self.out_dim = 512 * block.expansion
+
+        self.moe_layer = None
+        if use_moe:
+            self.moe_layer = MoELayer(
+                input_dim=self.out_dim,
+                expert_dim=self.out_dim,
+                num_experts=moe_experts,
+                k=1
+            )
 
     def _make_layer(self, block, planes, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)
@@ -183,39 +197,37 @@ class ResNet(nn.Module):
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
-    # def forward(self, x):
-    #     out = F.relu(self.bn1(self.conv1(x)))
-    #     out = self.layer1(out)
-    #     out = self.layer2(out)
-    #     out = self.layer3(out)
-    #     out = self.layer4(out)
-    #     out = F.avg_pool2d(out, 4)
-    #     out = out.view(out.size(0), -1)
-    #     y = self.linear(out)
-    #     return y
-    def forward(self, x):
-        # 保留中间层结果
+    def forward(self, x, task_id=None,routing_targets=None):
         out = F.relu(self.bn1(self.conv1(x)))
-        out1 = self.layer1(out)       # 第一个残差阶段
-        out2 = self.layer2(out1)      # 第二个残差阶段
-        out3 = self.layer3(out2)      # 第三个残差阶段
-        out4 = self.layer4(out3)      # 第四个残差阶段
-        
-        # 全局平均池化和展平
+        out1 = self.layer1(out)
+        out2 = self.layer2(out1)
+        out3 = self.layer3(out2)
+        out4 = self.layer4(out3)
+
         pooled = F.avg_pool2d(out4, 4)
-        features = pooled.view(pooled.size(0), -1)
+        features = pooled.view(pooled.size(0), -1)  # (B, D)
         
-        # 分类头
-        logits = self.linear(features)
-        
-        # 返回格式与原始模型一致
+        if self.use_moe and self.moe_layer is not None:
+            moe_output = self.moe_layer(features, task_id=task_id, routing_targets=routing_targets)
+            features = moe_output["output"]
+            # 返回 MoE 输出信息
+            return {
+            "fmaps": [out1, out2, out3, out4],
+            "features": features,
+            "routing_loss": moe_output.get("routing_loss", 0),
+            "gate_logits": moe_output.get("gate_logits"),
+            "expert_assignments": moe_output.get("expert_assignments")
+        }
         return {
             "fmaps": [out1, out2, out3, out4],
             "features": features,
+            # "logits": logits  # 保持与之前一致的输出格式
         }
 
-    # function to extact the multiple features
+
+    # ========== 以下为兼容旧接口的方法 ==========
     def feature_list(self, x):
+        """兼容旧代码"""
         out_list = []
         out = F.relu(self.bn1(self.conv1(x)))
         out_list.append(out)
@@ -232,7 +244,6 @@ class ResNet(nn.Module):
         y = self.linear(out)
         return y, out_list
 
-    # function to extact a specific feature
     def intermediate_forward(self, x, layer_index):
         out = F.relu(self.bn1(self.conv1(x)))
         if layer_index == 1:
@@ -251,7 +262,6 @@ class ResNet(nn.Module):
             out = self.layer4(out)
         return out
 
-    # function to extact the penultimate features
     def penultimate_forward(self, x):
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.layer1(out)
@@ -264,21 +274,22 @@ class ResNet(nn.Module):
         return y, penultimate
 
 
-def ResNet18(num_c):
-    return ResNet(PreActBlock, [2, 2, 2, 2], num_classes=num_c)
+# ============= Model Builders =============
+def ResNet18(num_c, use_moe=False, moe_experts=0):
+    return ResNet(PreActBlock, [2, 2, 2, 2], num_classes=num_c, use_moe=use_moe, moe_experts=moe_experts)
 
 
-def ResNet34(num_c):
-    return ResNet(BasicBlock, [3, 4, 6, 3], num_classes=num_c)
+def ResNet34(num_c, use_moe=False, moe_experts=0):
+    return ResNet(BasicBlock, [3, 4, 6, 3], num_classes=num_c, use_moe=use_moe, moe_experts=moe_experts)
 
 
-def ResNet50(num_c):
-    return ResNet(Bottleneck, [3, 4, 6, 3], num_classes=num_c)
+def ResNet50(num_c, use_moe=False, moe_experts=0):
+    return ResNet(Bottleneck, [3, 4, 6, 3], num_classes=num_c, use_moe=use_moe, moe_experts=moe_experts)
 
 
-def ResNet101(num_c):
-    return ResNet(Bottleneck, [3, 4, 23, 3], num_classes=num_c)
+def ResNet101(num_c, use_moe=False, moe_experts=0):
+    return ResNet(Bottleneck, [3, 4, 23, 3], num_classes=num_c, use_moe=use_moe, moe_experts=moe_experts)
 
 
-def ResNet152(num_c):
-    return ResNet(Bottleneck, [3, 8, 36, 3], num_classes=num_c)
+def ResNet152(num_c, use_moe=False, moe_experts=0):
+    return ResNet(Bottleneck, [3, 8, 36, 3], num_classes=num_c, use_moe=use_moe, moe_experts=moe_experts)
