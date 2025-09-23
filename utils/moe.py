@@ -36,14 +36,6 @@ class MoELayer(nn.Module):
         
         # 诊断工具：专家使用历史记录
         self.expert_usage_history = []
-        
-        # 诊断工具：门控输出统计
-        self.gate_stats = {
-            "mean": [],
-            "std": [],
-            "min": [],
-            "max": []
-        }
 
     def forward(self, x, task_id=None, routing_targets=None):
         """
@@ -60,13 +52,6 @@ class MoELayer(nn.Module):
             # 计算路由损失（交叉熵损失）
             routing_loss = F.cross_entropy(gate_logits, routing_targets)
 
-        
-        # ===== 诊断工具：记录门控输出统计 =====
-        if self.training:
-            self.gate_stats["mean"].append(gate_logits.mean().item())
-            self.gate_stats["std"].append(gate_logits.std().item())
-            self.gate_stats["min"].append(gate_logits.min().item())
-            self.gate_stats["max"].append(gate_logits.max().item())
         
         # ===== 支持每个样本的任务ID =====
         if task_id is not None:
@@ -279,91 +264,6 @@ class MoELayer(nn.Module):
             "imbalance_ratio": imbalance_ratio,
             "usage_trends": trends
         }
-    
-    # ===== 诊断工具：门控输出报告 =====
-    def report_gate_stats(self):
-        """报告门控输出统计"""
-        if not self.gate_stats["mean"]:
-            return None
-        
-        stats = {}
-        for key in self.gate_stats:
-            stats[key] = {
-                "min": np.min(self.gate_stats[key]),
-                "max": np.max(self.gate_stats[key]),
-                "mean": np.mean(self.gate_stats[key]),
-                "std": np.std(self.gate_stats[key])
-            }
-        
-        return stats
-    
-    # ===== 诊断工具：可视化路由决策 =====
-    def visualize_routing(self, save_path=None):
-        """可视化路由决策"""
-        if not self.routing_acc_history or not self.expert_usage_history:
-            print("No routing data available for visualization")
-            return
-        
-        plt.figure(figsize=(15, 10))
-        
-        # 路由准确性图
-        plt.subplot(2, 2, 1)
-        plt.plot(self.routing_acc_history)
-        plt.title("Routing Accuracy Over Time")
-        plt.xlabel("Batch")
-        plt.ylabel("Accuracy")
-        plt.grid(True)
-        
-        # 专家使用图
-        plt.subplot(2, 2, 2)
-        expert_usage = np.array(self.expert_usage_history)
-        for i in range(expert_usage.shape[1]):
-            plt.plot(expert_usage[:, i], label=f"Expert {i}")
-        plt.title("Expert Usage Over Time")
-        plt.xlabel("Batch")
-        plt.ylabel("Usage Count")
-        plt.legend()
-        plt.grid(True)
-        
-        # 门控输出统计图
-        plt.subplot(2, 2, 3)
-        plt.plot(self.gate_stats["mean"], label="Mean")
-        plt.plot(self.gate_stats["std"], label="Std")
-        plt.plot(self.gate_stats["min"], label="Min")
-        plt.plot(self.gate_stats["max"], label="Max")
-        plt.title("Gate Logits Statistics")
-        plt.xlabel("Batch")
-        plt.ylabel("Value")
-        plt.legend()
-        plt.grid(True)
-        
-        # 混淆矩阵热力图（最后一个）
-        if self.routing_confusion_matrices:
-            plt.subplot(2, 2, 4)
-            cm = self.routing_confusion_matrices[-1]
-            plt.imshow(cm, cmap='Blues', interpolation='nearest')
-            plt.colorbar()
-            plt.title("Routing Confusion Matrix")
-            plt.xlabel("Predicted Expert")
-            plt.ylabel("True Expert")
-            plt.xticks(range(self.num_experts))
-            plt.yticks(range(self.num_experts))
-            
-            # 添加数值标签
-            for i in range(cm.shape[0]):
-                for j in range(cm.shape[1]):
-                    plt.text(j, i, str(cm[i, j]), ha='center', va='center')
-        
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path)
-            print(f"Routing visualization saved to {save_path}")
-        else:
-            plt.show()
-        
-        plt.close()
-    
     # ===== 诊断工具：重置诊断数据 =====
     def reset_diagnostics(self):
         """重置所有诊断数据"""
@@ -376,3 +276,4 @@ class MoELayer(nn.Module):
             "min": [],
             "max": []
         }
+    
