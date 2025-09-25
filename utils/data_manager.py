@@ -147,7 +147,8 @@ class DataManager(object):
         self._train_trsf = idata.train_trsf
         self._test_trsf = idata.test_trsf
         self._common_trsf = idata.common_trsf
-
+        # 获取原始类别标签
+        original_class_labels = idata.class_order
         # Order
         order = [i for i in range(len(np.unique(self._train_targets)))]
         if shuffle:
@@ -157,7 +158,16 @@ class DataManager(object):
             order = idata.class_order
         self._class_order = order
         logging.info(self._class_order)
-
+        # 创建打乱后的类别标签列表
+        shuffled_labels = [original_class_labels[i] for i in order]
+        
+        # 输出打乱后的类别标签
+        logging.info("Shuffled class labels:")
+        for i, label in enumerate(shuffled_labels):
+            logging.info(f"Class {i}: {label}")
+        
+        # 打印所有类别标签
+        logging.info("All shuffled class labels: %s", ", ".join(shuffled_labels))
         # Map indices
         self._train_targets = _map_new_class_index(
             self._train_targets, self._class_order

@@ -185,3 +185,4 @@ class USTC2016:
         print(f"  训练集大小: {len(self.train_data)}")
         print(f"  测试集大小: {len(self.test_data)}")
         print(f"  类别数量: {len(self.class_order)}")
+        print(f"  类别顺序: {self.class_order}")
