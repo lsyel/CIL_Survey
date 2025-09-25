@@ -40,12 +40,11 @@ class iCaRLMoe(BaseLearner):
             use_moe=True
         )
         self._cur_task = -1  # 初始化为 -1，第一个任务变成 0
-
     def after_task(self):
         self._old_network = self._network.copy().freeze()
         self._known_classes = self._total_classes
         logging.info("Exemplar size: {}".format(self.exemplar_size))
-
+        self._save_model()
     def incremental_train(self, data_manager):
         self._cur_task += 1
         self._total_classes = self._known_classes + data_manager.get_task_size(
@@ -365,7 +364,24 @@ class iCaRLMoe(BaseLearner):
         ret["grouped"] = grouped
 
         return ret
-
+    def _save_model(self):
+        """保存模型到文件"""
+        model_path = os.path.join("./pth", f"task_{self._cur_task}_model.pth")
+        
+        # 获取模型状态
+        model_state = {
+            'network_state_dict': self._network.state_dict(),
+            'total_classes': self._total_classes,
+            'known_classes': self._known_classes,
+            'cur_task': self._cur_task,
+            'data_memory': self._data_memory,
+            'targets_memory': self._targets_memory,
+            'args': self.args
+        }
+        
+        torch.save(model_state, model_path)
+        logging.info(f"Model saved to {model_path}")
+        return model_path
 
 # ========== 辅助函数：知识蒸馏损失 ==========
 def _KD_loss(pred, soft, T):
