@@ -180,7 +180,14 @@ class USTC2016:
         
         self.test_data = np.array([s[0] for s in test_dataset.samples])  # 文件路径
         self.test_targets = np.array([s[1] for s in test_dataset.samples])  # 标签索引
-        
+                # ===== 新增：输出字符串标签和整数标签的对应关系 =====
+        print("\n类别标签对应关系:")
+        print("----------------")
+        print("整数标签 | 字符串标签")
+        print("--------|----------")
+        for idx, label in enumerate(self.class_order):
+            print(f"   {idx}    |   {label}")
+        print("----------------")
         print(f"已加载 USTC2016 数据集:")
         print(f"  训练集大小: {len(self.train_data)}")
         print(f"  测试集大小: {len(self.test_data)}")
