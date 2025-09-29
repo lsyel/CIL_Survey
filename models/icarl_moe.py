@@ -285,30 +285,82 @@ class iCaRLMoe(BaseLearner):
             logging.info(info)
 
     def eval_task(self, save_conf=False):
-        cnn_pred_list, cnn_target_list, cnn_logits_list = [], [], []  # 👈 新增 logits 列表
+        """评估模型性能，并计算每个类别的准确率"""
+        cnn_pred_list, cnn_target_list, cnn_logits_list = [], [], []
         self._network.eval()
 
-        for i, (_, inputs, targets) in enumerate(self.test_loader):
+        # 初始化类别统计
+        class_correct = [0] * self._total_classes
+        class_total = [0] * self._total_classes
+        
+        # 使用进度条显示评估过程
+        progress_bar = tqdm(self.test_loader, desc="评估任务")
+        for i, (_, inputs, targets) in enumerate(progress_bar):
             inputs = inputs.to(self._device)
             with torch.no_grad():
                 outputs = self._network(inputs, task_id=None)
-                logits = outputs["logits"]  # 👈 获取 logits
-                cnn_logits_list.append(logits.cpu().numpy())  # 👈 保存 logits
+                logits = outputs["logits"]
+                cnn_logits_list.append(logits.cpu().numpy())
+            
             cnn_preds = torch.max(logits, dim=1)[1]
-
             cnn_pred_list.append(cnn_preds.cpu().numpy())
             cnn_target_list.append(targets.cpu().numpy())
+            
+            # 统计每个类别的正确预测数
+            for t, p in zip(targets.cpu().numpy(), cnn_preds.cpu().numpy()):
+                if t < self._total_classes:  # 确保类别索引有效
+                    class_total[t] += 1
+                    if t == p:
+                        class_correct[t] += 1
 
         cnn_pred_all = np.concatenate(cnn_pred_list)
         cnn_target_all = np.concatenate(cnn_target_list)
-        cnn_logits_all = np.vstack(cnn_logits_list)  # 👈 合并 logits
+        cnn_logits_all = np.vstack(cnn_logits_list)
 
-        # 👇 传入 4 个参数：pred, true, logits, known_classes
+        # 计算整体准确率
         cnn_accy = self._evaluate(cnn_pred_all, cnn_target_all, cnn_logits_all, self._total_classes)
+        
+        # 计算并打印每个类别的准确率
+        logging.info("\n类别准确率:")
+        logging.info("=" * 50)
+        logging.info(f"{'类别':<15} | {'样本数':<8} | {'正确数':<8} | {'准确率':<8}")
+        logging.info("-" * 50)
+        
+        # 获取类别标签映射（如果有）
+        if hasattr(self, 'data_manager') and hasattr(self.data_manager, 'class_order'):
+            class_labels = self.data_manager.class_order
+        else:
+            class_labels = [str(i) for i in range(self._total_classes)]
+        
+        # 计算平均准确率
+        total_acc = 0.0
+        valid_classes = 0
+        
+        for i in range(self._total_classes):
+            if class_total[i] > 0:
+                acc = 100 * class_correct[i] / class_total[i]
+                total_acc += acc
+                valid_classes += 1
+            else:
+                acc = 0.0
+            logging.info(f"{class_labels[i]:<15} | {class_total[i]:<8} | {class_correct[i]:<8} | {acc:.2f}%")
+        
+        # 计算平均准确率
+        if valid_classes > 0:
+            avg_acc = total_acc / valid_classes
+            logging.info("-" * 50)
+            logging.info(f"{'平均准确率':<15} | {'':<8} | {'':<8} | {avg_acc:.2f}%")
+        
+        logging.info("=" * 50)
 
         nme_accy = None
 
         if save_conf:
+            # 保存混淆矩阵供后续分析
+            confusion = confusion_matrix(cnn_target_all, cnn_pred_all)
+            np.save(os.path.join(self.args["logfilename"], f"confusion_task_{self._cur_task}.npy"), confusion)
+            
+            # 保存预测结果
             np.save(os.path.join(self.args["logfilename"], "cnn_pred.npy"), cnn_pred_all)
             np.save(os.path.join(self.args["logfilename"], "cnn_target.npy"), cnn_target_all)
             np.save(os.path.join(self.args["logfilename"], "cnn_logits.npy"), cnn_logits_all)
@@ -365,23 +417,60 @@ class iCaRLMoe(BaseLearner):
 
         return ret
     def _save_model(self):
-        """保存模型到文件"""
         model_path = os.path.join("./pth", f"task_{self._cur_task}_model.pth")
         
-        # 获取模型状态
+        # 收集所有参数信息
+        param_info = []
+        for name, param in self._network.named_parameters():
+            param_info.append({
+                'name': name,
+                'shape': tuple(param.shape),
+                'dtype': str(param.dtype),
+                'mean': param.mean().item(),
+                'std': param.std().item(),
+                'min': param.min().item(),
+                'max': param.max().item()
+            })
+        
+        # 保存模型状态
         model_state = {
             'network_state_dict': self._network.state_dict(),
+            'moe_layer_state': self._network.convnet.moe_layer.state_dict(),
             'total_classes': self._total_classes,
             'known_classes': self._known_classes,
             'cur_task': self._cur_task,
             'data_memory': self._data_memory,
             'targets_memory': self._targets_memory,
-            'args': self.args
+            'args': self.args,
+            'param_info': param_info  # 添加参数信息
         }
         
         torch.save(model_state, model_path)
-        logging.info(f"Model saved to {model_path}")
+        
+        # 打印参数摘要
+        self._log_param_summary(param_info, "保存模型参数")
+        
+        logging.info(f"模型已保存到 {model_path}")
         return model_path
+
+    def _log_param_summary(self, param_info, title):
+        """记录参数摘要信息"""
+        logging.info(f"\n{'='*50}")
+        logging.info(f"{title} - 参数摘要")
+        logging.info(f"{'参数名称':<40} | {'形状':<20} | {'均值':<10} | {'标准差':<10} | {'最小值':<10} | {'最大值':<10}")
+        logging.info(f"{'-'*100}")
+        
+        for info in param_info:
+            logging.info(
+                f"{info['name']:<40} | {str(info['shape']):<20} | "
+                f"{info['mean']:>10.6f} | {info['std']:>10.6f} | "
+                f"{info['min']:>10.6f} | {info['max']:>10.6f}"
+            )
+        
+        # 添加统计信息
+        total_params = sum(np.prod(info['shape']) for info in param_info)
+        logging.info(f"\n总计参数数量: {total_params}")
+        logging.info(f"{'='*50}\n")
 
 # ========== 辅助函数：知识蒸馏损失 ==========
 def _KD_loss(pred, soft, T):
