@@ -147,33 +147,59 @@ class DataManager(object):
         self._train_trsf = idata.train_trsf
         self._test_trsf = idata.test_trsf
         self._common_trsf = idata.common_trsf
+        
         # 获取原始类别标签
         original_class_labels = idata.class_order
+        logging.info(f"原始类别标签: {original_class_labels}")
+        
         # Order
         order = [i for i in range(len(np.unique(self._train_targets)))]
         if shuffle:
             np.random.seed(seed)
             order = np.random.permutation(len(order)).tolist()
+            logging.info(f"随机打乱类别顺序 (种子={seed}): {order}")
         else:
-            order = idata.class_order
+            # order = idata.class_order
+            order = [original_class_labels.index(i) for i in idata.class_order]
+            logging.info(f"使用原始类别顺序: {order}")
+        
         self._class_order = order
-        logging.info(self._class_order)
+        logging.info(f"最终类别顺序: {self._class_order}")
+        
+        # 保存类别顺序到文件
+        save_path = f"class_order_{dataset_name}_seed{seed}.npy"
+        np.save(save_path, self._class_order)
+        logging.info(f"已保存类别顺序到: {save_path}")
+        
         # 创建打乱后的类别标签列表
         shuffled_labels = [original_class_labels[i] for i in order]
         
         # 输出打乱后的类别标签
-        logging.info("Shuffled class labels:")
+        logging.info("打乱后的类别标签:")
         for i, label in enumerate(shuffled_labels):
-            logging.info(f"Class {i}: {label}")
+            logging.info(f"新类别 {i} -> 原始类别 {label}")
         
         # 打印所有类别标签
-        logging.info("All shuffled class labels: %s", ", ".join(shuffled_labels))
+        logging.info("所有打乱后的类别标签: %s", ", ".join(shuffled_labels))
+        
+        # 打印映射前的目标值示例
+        logging.info("映射前的训练目标示例 (前10个): %s", self._train_targets[:10])
+        logging.info("映射前的测试目标示例 (前10个): %s", self._test_targets[:10])
+        
         # Map indices
         self._train_targets = _map_new_class_index(
             self._train_targets, self._class_order
         )
         self._test_targets = _map_new_class_index(self._test_targets, self._class_order)
-
+        
+        # 打印映射后的目标值示例
+        logging.info("映射后的训练目标示例 (前10个): %s", self._train_targets[:10])
+        logging.info("映射后的测试目标示例 (前10个): %s", self._test_targets[:10])
+        
+        # 打印映射关系
+        logging.info("类别映射关系:")
+        for old_idx, new_idx in enumerate(self._class_order):
+            logging.info(f"原始类别 {old_idx} ({original_class_labels[old_idx]}) -> 新类别 {new_idx} ({shuffled_labels[new_idx]})")
     def _select(self, x, y, low_range, high_range):
         idxes = np.where(np.logical_and(y >= low_range, y < high_range))[0]
         return x[idxes], y[idxes]

@@ -102,7 +102,8 @@ def _train(args):
     # 初始化数据管理器，用于管理数据集
     data_manager = DataManager(
         args["dataset"],
-        args["shuffle"],
+        # args["shuffle"],
+        False,
         args["seed"],
         args["init_cls"],
         args["increment"],
