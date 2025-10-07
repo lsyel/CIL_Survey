@@ -1,5 +1,6 @@
 import logging
 import numpy as np
+from sklearn.metrics import confusion_matrix
 from tqdm import tqdm
 import torch
 from torch import nn
@@ -442,13 +443,14 @@ class iCaRLMoe(BaseLearner):
             'data_memory': self._data_memory,
             'targets_memory': self._targets_memory,
             'args': self.args,
-            'param_info': param_info  # 添加参数信息
+            'param_info': param_info,  # 添加参数信息
+            'moe_experts': self._network.convnet.moe_layer.num_experts  # 新增
         }
         
         torch.save(model_state, model_path)
         
         # 打印参数摘要
-        self._log_param_summary(param_info, "保存模型参数")
+        # self._log_param_summary(param_info, "保存模型参数")
         
         logging.info(f"模型已保存到 {model_path}")
         return model_path
