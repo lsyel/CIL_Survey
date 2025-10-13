@@ -20,7 +20,7 @@ for SIZE in "${MEMORY_SIZES[@]}"; do
     cmd+=" -init 5"
     cmd+=" -incre 5"
     cmd+=" -p benchmark"
-    cmd+=" -d 0"
+    cmd+=" -d 1"
     cmd+=" --memory_size $SIZE"
     cmd+=" > logs/icarl_memory_${SIZE}.log 2>&1"
     

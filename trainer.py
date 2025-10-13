@@ -103,7 +103,8 @@ def _train(args):
     data_manager = DataManager(
         args["dataset"],
         # args["shuffle"],
-        False,
+        # False,
+        True,
         args["seed"],
         args["init_cls"],
         args["increment"],
