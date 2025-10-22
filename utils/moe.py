@@ -22,9 +22,12 @@ class MoELayer(nn.Module):
             nn.Linear(input_dim, expert_dim) for _ in range(num_experts)
         ])
         self.gate = nn.Sequential(
-            nn.Linear(input_dim, 256),
+            nn.Linear(input_dim, 256),  # 第一层
             nn.ReLU(),
-            nn.Linear(256, num_experts)
+            nn.Dropout(0.2),            # 新增Dropout层
+            nn.Linear(256, 256),        # 新增中间层
+            nn.ReLU(),
+            nn.Linear(256, num_experts) # 输出层
         )
         # 保存旧门控权重，用于扩展时初始化
         self._old_gate_weights = None
@@ -172,27 +175,32 @@ class MoELayer(nn.Module):
         new_gate = nn.Sequential(
             nn.Linear(input_dim, 256),
             nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(256, 256),
+            nn.ReLU(),
             nn.Linear(256, new_num_experts)
         ).to(device)
         
         with torch.no_grad():
-            # 复制旧门控权重（Sequential中的前两个Linear层）
+            # 复制旧门控权重（Sequential中的所有Linear层）
             if self._old_gate_weights is not None:
-                # 第一个Linear层（输入层到隐藏层）
+                # 复制前两层（输入层和中间层）
                 new_gate[0].weight.data.copy_(self._old_gate_weights[0]['weight'])
                 new_gate[0].bias.data.copy_(self._old_gate_weights[0]['bias'])
                 
-                # 第二个Linear层（隐藏层到输出层）
-                # 注意：输出维度扩展了
-                old_output_dim = self._old_gate_weights[1]['weight'].size(0)
-                new_gate[2].weight.data[:old_output_dim] = self._old_gate_weights[1]['weight']
-                new_gate[2].bias.data[:old_output_dim] = self._old_gate_weights[1]['bias']
+                new_gate[3].weight.data.copy_(self._old_gate_weights[1]['weight'])
+                new_gate[3].bias.data.copy_(self._old_gate_weights[1]['bias'])
+                
+                # 输出层（只复制旧专家的权重）
+                old_output_dim = self._old_gate_weights[2]['weight'].size(0)
+                new_gate[5].weight.data[:old_output_dim] = self._old_gate_weights[2]['weight']
+                new_gate[5].bias.data[:old_output_dim] = self._old_gate_weights[2]['bias']
                 
                 # 新专家门控初始化为负偏置
                 if new_num_experts > old_num:
                     # 初始化新门控权重
-                    new_gate[2].weight[old_output_dim:].normal_(mean=-0.1, std=0.01)
-                    new_gate[2].bias[old_output_dim:].fill_(-0.5)  # 负偏置
+                    new_gate[5].weight[old_output_dim:].normal_(mean=-0.1, std=0.01)
+                    new_gate[5].bias[old_output_dim:].fill_(-0.5)  # 负偏置
         
         self.gate = new_gate
         self.num_experts = new_num_experts
