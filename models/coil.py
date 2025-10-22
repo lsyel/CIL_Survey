@@ -18,7 +18,7 @@ import copy
 
 EPSILON = 1e-8
 
-epochs = 160
+epochs = 20
 lrate = 0.1
 milestones = [80, 120]
 lrate_decay = 0.1
