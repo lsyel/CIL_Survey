@@ -235,7 +235,7 @@ class iCaRLMoe(BaseLearner):
                     loss_kd = 0
                 
                 # 主损失（分类 + 蒸馏）
-                main_loss = loss_clf + loss_kd
+                main_loss = 2*loss_clf + loss_kd
                 
                 # 路由损失权重
                 routing_loss_weight = 0.1

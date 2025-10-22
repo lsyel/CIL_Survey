@@ -1,12 +1,11 @@
 #!/bin/bash
 
 # 定义要测试的memory_size值
-MEMORY_SIZES=(5000 10000 15000 20000)
+MEMORY_SIZES=( 10000 15000 )
 
 # 创建日志目录
-mkdir -p logs
+mkdir -p eval_result
 
-echo "🚀 开始执行增量学习实验..."
 
 # 遍历所有memory_size值
 for SIZE in "${MEMORY_SIZES[@]}"; do
@@ -22,7 +21,7 @@ for SIZE in "${MEMORY_SIZES[@]}"; do
     cmd+=" -p benchmark"
     cmd+=" -d 1"
     cmd+=" --memory_size $SIZE"
-    cmd+=" > logs/icarl_moe_memory_${SIZE}.log 2>&1"
+    cmd+=" > eval_result/icarl_moe_memory_${SIZE}.log 2>&1"
     
     # 打印并执行命令
     echo "执行命令: $cmd"
@@ -30,14 +29,12 @@ for SIZE in "${MEMORY_SIZES[@]}"; do
     
     # 检查执行结果
     if [ $? -eq 0 ]; then
-        echo "✅ memory_size=$SIZE 实验成功完成"
+        echo "✅ ${MODEL_NAME} memory_size=$SIZE 实验成功完成"
     else
-        echo "❌ memory_size=$SIZE 实验执行失败！"
+        echo "❌ ${MODEL_NAME}_memory_size=$SIZE 实验执行失败！"
         exit 1
     fi
     
-    echo "===== memory_size=$SIZE 实验完成 ====="
+    echo "===== ${MODEL_NAME}_memory_size=$SIZE 实验完成 ====="
     echo
 done
-
-echo "🎉 所有增量学习实验执行完毕！"

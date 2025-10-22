@@ -177,7 +177,7 @@ class iCaRL(BaseLearner):
                     T,
                 )
 
-                loss = loss_clf + loss_kd
+                loss = 2*loss_clf + loss_kd
 
                 optimizer.zero_grad()
                 loss.backward()

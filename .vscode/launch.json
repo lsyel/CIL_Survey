@@ -101,6 +101,32 @@
                 "20000",
             ]
         },
-
+        {
+            "name": "memo",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main_memo.py",
+            "console": "integratedTerminal",
+            "stopOnEntry": true,
+            "justMyCode": false,
+            "args": [
+                "--dataset",
+                "ustc2016",
+                "-model",
+                "memo",
+                "-net",
+                "resnet34",
+                "-init",
+                "5",
+                "-incre",
+                "5",
+                "-p",
+                "benchmark",
+                "-d",
+                "0",
+                "--memory_size",
+                "10000",
+            ]
+        },
     ]
 }
