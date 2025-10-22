@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 定义要测试的memory_size值
-MEMORY_SIZES=( 10000 15000 )
+MEMORY_SIZES=( 10000  )
 MODEL_NAME=memo
 NET=memo_resnet32
 INIT=5

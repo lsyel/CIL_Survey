@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 定义要测试的memory_size值
-MEMORY_SIZES=( 10000 15000 )
+MEMORY_SIZES=( 10000  )
 
 # 创建日志目录
 mkdir -p eval_result
