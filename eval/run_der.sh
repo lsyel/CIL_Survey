@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # 定义要测试的memory_size值
-MEMORY_SIZES=( 10000 15000 )
+MEMORY_SIZES=( 10000  )
 MODEL_NAME=der
-NET=resnet34
+NET=my_resnet34
 INIT=5
 INCREMENT=5
 DEVICE=0

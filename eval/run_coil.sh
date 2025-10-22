@@ -2,7 +2,7 @@
 
 # 定义要测试的memory_size值
 MEMORY_SIZES=( 10000  )
-MODEL_NAME=foster
+MODEL_NAME=coil
 NET=my_resnet34
 INIT=5
 INCREMENT=5
@@ -34,7 +34,7 @@ for SIZE in "${MEMORY_SIZES[@]}"; do
     
     # 检查执行结果
     if [ $? -eq 0 ]; then
-        echo "✅ ${MODEL_NAME}memory_size=$SIZE 实验成功完成"
+        echo "✅ ${MODEL_NAME}_memory_size=$SIZE 实验成功完成"
     else
         echo "❌ ${MODEL_NAME}_memory_size=$SIZE 实验执行失败！"
         exit 1
