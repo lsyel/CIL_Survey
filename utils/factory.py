@@ -12,6 +12,7 @@ from models.bic import BiC
 from models.podnet import PODNet
 from models.rmm import RMM_FOSTER, RMM_iCaRL
 from models.wa import WA
+from models.wa_moe import WA_MoE
 from models.memo import MEMO
 
 def get_model(model_name, args):
@@ -30,6 +31,8 @@ def get_model(model_name, args):
         return EWC(args)
     elif name == "wa":
         return WA(args)
+    elif name == "wa_moe":
+        return WA_MoE(args)
     elif name == "der":
         return DER(args)
     elif name == "finetune":

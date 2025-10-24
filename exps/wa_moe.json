@@ -1,0 +1,16 @@
+{
+    "prefix": "benchmark",
+    "dataset": "ustc2016",
+    "memory_size": 10000,
+    "memory_per_class": 1000,
+    "fixed_memory": false,
+    "shuffle": true,
+    "init_cls": 5,
+    "increment": 5,
+    "model_name": "wa_moe",
+    "convnet_type": "my_resnet34_moe",
+    "device": ["0"],
+    "seed": [1993],
+    "use_moe": 1
+
+}
