@@ -1,5 +1,7 @@
 import logging
+import os
 import numpy as np
+from sklearn.metrics import confusion_matrix
 from tqdm import tqdm
 import torch
 from torch import nn
@@ -177,7 +179,7 @@ class iCaRL(BaseLearner):
                     T,
                 )
 
-                loss = loss_clf + loss_kd
+                loss = 2*loss_clf + loss_kd
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -210,8 +212,116 @@ class iCaRL(BaseLearner):
                 )
             prog_bar.set_description(info)
         logging.info(info)
+    def eval_task(self, save_conf=False):
+        """评估模型性能，并计算每个类别的准确率"""
+        cnn_pred_list, cnn_target_list, cnn_logits_list = [], [], []
+        self._network.eval()
 
+        # 初始化类别统计
+        class_correct = [0] * self._total_classes
+        class_total = [0] * self._total_classes
+        
+        # 使用进度条显示评估过程
+        progress_bar = tqdm(self.test_loader, desc="评估任务")
+        for i, (_, inputs, targets) in enumerate(progress_bar):
+            inputs = inputs.to(self._device)
+            with torch.no_grad():
+                outputs = self._network(inputs, task_id=None)
+                logits = outputs["logits"]
+                cnn_logits_list.append(logits.cpu().numpy())
+            
+            cnn_preds = torch.max(logits, dim=1)[1]
+            cnn_pred_list.append(cnn_preds.cpu().numpy())
+            cnn_target_list.append(targets.cpu().numpy())
+            
+            # 统计每个类别的正确预测数
+            for t, p in zip(targets.cpu().numpy(), cnn_preds.cpu().numpy()):
+                if t < self._total_classes:  # 确保类别索引有效
+                    class_total[t] += 1
+                    if t == p:
+                        class_correct[t] += 1
 
+        cnn_pred_all = np.concatenate(cnn_pred_list)
+        cnn_target_all = np.concatenate(cnn_target_list)
+        cnn_logits_all = np.vstack(cnn_logits_list)
+
+        # 计算整体准确率
+        cnn_accy = self._evaluate(cnn_pred_all, cnn_target_all, cnn_logits_all, self._total_classes)
+        
+        # 计算并打印每个类别的准确率
+        logging.info("\n类别准确率:")
+        logging.info("=" * 50)
+        logging.info(f"{'类别':<15} | {'样本数':<8} | {'正确数':<8} | {'准确率':<8}")
+        logging.info("-" * 50)
+        
+        # 获取类别标签映射（如果有）
+        if hasattr(self, 'data_manager') and hasattr(self.data_manager, 'class_order'):
+            class_labels = self.data_manager.class_order
+        else:
+            class_labels = [str(i) for i in range(self._total_classes)]
+        
+        # 计算平均准确率
+        total_acc = 0.0
+        valid_classes = 0
+        
+        for i in range(self._total_classes):
+            if class_total[i] > 0:
+                acc = 100 * class_correct[i] / class_total[i]
+                total_acc += acc
+                valid_classes += 1
+            else:
+                acc = 0.0
+            logging.info(f"{class_labels[i]:<15} | {class_total[i]:<8} | {class_correct[i]:<8} | {acc:.2f}%")
+        
+        # 计算平均准确率
+        if valid_classes > 0:
+            avg_acc = total_acc / valid_classes
+            logging.info("-" * 50)
+            logging.info(f"{'平均准确率':<15} | {'':<8} | {'':<8} | {avg_acc:.2f}%")
+        
+        logging.info("=" * 50)
+
+        nme_accy = None
+
+        if save_conf:
+            # 保存混淆矩阵供后续分析
+            confusion = confusion_matrix(cnn_target_all, cnn_pred_all)
+            np.save(os.path.join(self.args["logfilename"], f"confusion_task_{self._cur_task}.npy"), confusion)
+            
+            # 保存预测结果
+            np.save(os.path.join(self.args["logfilename"], "cnn_pred.npy"), cnn_pred_all)
+            np.save(os.path.join(self.args["logfilename"], "cnn_target.npy"), cnn_target_all)
+            np.save(os.path.join(self.args["logfilename"], "cnn_logits.npy"), cnn_logits_all)
+
+        return cnn_accy, nme_accy
+    def _evaluate(self, y_pred, y_true, y_logits, total_classes):
+        """
+        使用 logits 计算 top1, top3
+        """
+        ret = {}
+
+        # ===== Top-1 =====
+        ret["top1"] = (y_pred == y_true).sum() / len(y_true)
+
+        # ===== Top-3 =====
+        top3_correct = 0
+        for i in range(len(y_true)):
+            # 获取 logits 排名前三的类别
+            top3 = np.argsort(y_logits[i])[-3:][::-1]  # 降序取前3
+            if y_true[i] in top3:
+                top3_correct += 1
+        ret["top3"] = top3_correct / len(y_true)
+
+        # ===== Grouped =====
+        grouped = {}
+        task_size = self.args["increment"]
+        for i in range(0, total_classes, task_size):
+            mask = (y_true >= i) & (y_true < i + task_size)
+            if mask.any():
+                grouped[f"{i:0>2d}-{i+task_size-1:0>2d}"] = (y_pred[mask] == y_true[mask]).mean()
+        ret["grouped"] = grouped
+
+        return ret
 def _KD_loss(pred, soft, T):
     pred = torch.log_softmax(pred / T, dim=1)
     soft = torch.softmax(soft / T, dim=1)
