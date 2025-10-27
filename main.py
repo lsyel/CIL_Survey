@@ -33,6 +33,8 @@ def setup_parser():
     parser.add_argument('--debug', action="store_true")
     parser.add_argument('--skip', action="store_true",)
     parser.add_argument('--use_moe','-moe', type=bool, default=False)
+    parser.add_argument('--replay_factor','-rfac', type=float, default=0.0)
+
     return parser
 
 

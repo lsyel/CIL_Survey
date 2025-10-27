@@ -17,7 +17,7 @@ EPSILON = 1e-8
 
 init_epoch = 50
 init_lr = 0.1
-init_milestones = [40]
+init_milestones = [35,40]
 init_lr_decay = 0.1
 init_weight_decay = 0.0005
 
@@ -35,12 +35,13 @@ T = 2
 class iCaRL(BaseLearner):
     def __init__(self, args):
         super().__init__(args)
-        self._network = IncrementalNet(args["convnet_type"], False)
+        self._network = IncrementalNet(args["convnet_type"], False,use_moe=True)
 
     def after_task(self):
         self._old_network = self._network.copy().freeze()
         self._known_classes = self._total_classes
         logging.info("Exemplar size: {}".format(self.exemplar_size))
+        super().after_task()
 
     def incremental_train(self, data_manager):
         self._cur_task += 1
