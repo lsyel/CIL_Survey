@@ -17,7 +17,7 @@ EPSILON = 1e-8
 # ========== 超参数 ==========
 init_epoch = 50
 init_lr = 0.1
-init_milestones = [40]
+init_milestones = [35,40]
 init_lr_decay = 0.1
 init_weight_decay = 0.0005
 
@@ -41,10 +41,13 @@ class iCaRLMoe(BaseLearner):
             use_moe=True
         )
         self._cur_task = -1  # 初始化为 -1，第一个任务变成 0
+        self.routing_eval_history = []  # 可选：记录路由评估历史
+        
     def after_task(self):
         self._old_network = self._network.copy().freeze()
         self._known_classes = self._total_classes
         logging.info("Exemplar size: {}".format(self.exemplar_size))
+        super().after_task()
         self._save_model()
     def incremental_train(self, data_manager):
         self._cur_task += 1
@@ -188,9 +191,10 @@ class iCaRLMoe(BaseLearner):
         for _, epoch in enumerate(prog_bar):
             self._network.train()
             losses = 0.0
-            routing_losses = 0.0  # 单独记录路由损失
+            routing_losses = 0.0
             correct, total = 0, 0
-            
+            routing_correct, routing_total = 0, 0
+
             # 获取任务大小（每个任务的类别数）
             task_size = self.args["increment"]
             
@@ -218,7 +222,15 @@ class iCaRLMoe(BaseLearner):
                 # ===== 前向传播 =====
                 output = self._network(inputs, task_id=None, routing_targets=routing_targets)
                 logits = output["logits"]
-                routing_loss = output.get("routing_loss", 0)  # 获取路由损失
+                routing_loss = output.get("routing_loss", 0)
+                
+                # ===== 新增：计算路由准确率 =====
+                with torch.no_grad():
+                    gate_logits = output.get("gate_logits")
+                    if gate_logits is not None:
+                        predicted_tasks = torch.argmax(gate_logits, dim=1)
+                        routing_correct += (predicted_tasks == routing_targets).sum().item()
+                        routing_total += len(targets)
                 
                 # ===== 损失计算 =====
                 # 分类损失
@@ -235,27 +247,23 @@ class iCaRLMoe(BaseLearner):
                     loss_kd = 0
                 
                 # 主损失（分类 + 蒸馏）
-                main_loss = 2*loss_clf + loss_kd
+                main_loss = 2 * loss_clf + loss_kd
                 
                 # 路由损失权重
-                routing_loss_weight = 0.1
+                routing_loss_weight = 0.3 * (0.9 ** self._cur_task)
+                weighted_routing_loss = routing_loss_weight * routing_loss
+                
+                # 总损失
+                total_loss = main_loss + weighted_routing_loss
                 
                 # ===== 反向传播 =====
                 optimizer.zero_grad()
-                
-                # 1. 先计算主损失的梯度
-                main_loss.backward(retain_graph=True)  # 保留计算图以便后续计算路由损失
-                
-                # 2. 再计算路由损失的梯度
-                weighted_routing_loss = routing_loss_weight * routing_loss
-                weighted_routing_loss.backward()
-                
-                # 3. 更新参数
+                total_loss.backward()
                 optimizer.step()
                 
                 # ===== 记录损失 =====
-                losses += main_loss.item()
-                routing_losses += weighted_routing_loss.item()
+                losses += main_loss.item()  # 只记录主损失，不包括路由损失
+                routing_losses += weighted_routing_loss.item()  # 记录加权的路由损失
                 
                 # ===== 统计准确率 =====
                 _, preds = torch.max(logits, dim=1)
@@ -265,23 +273,42 @@ class iCaRLMoe(BaseLearner):
                 if random.random() < 0.01:
                     logging.info(f"Main loss: {main_loss.item():.4f}, Routing loss: {weighted_routing_loss.item():.4f}")
             
+            # ===== 新增：打印路由准确率 =====
+            if routing_total > 0:
+                routing_accuracy = 100.0 * routing_correct / routing_total
+                logging.info(f"路由准确率: {routing_accuracy:.2f}% ({routing_correct}/{routing_total})")
+            
             # ===== 更新学习率 =====
             scheduler.step()
+            
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
             
             # ===== 计算测试准确率 =====
-            test_acc = self._compute_accuracy(self._network, test_loader)
             
             # ===== 日志记录 =====
-            info = "Task {}, Epoch {}/{} => Main Loss {:.3f}, Routing Loss {:.3f}, Train_accy {:.2f}, Test_accy {:.2f}".format(
-                self._cur_task,
-                epoch + 1,
-                epochs,
-                losses / len(train_loader),
-                routing_losses / len(train_loader),
-                train_acc,
-                test_acc,
-            )
+            # 修正：每个epoch都计算测试准确率，但只在每5个epoch打印一次
+            if epoch % 5 == 0:
+                test_acc = self._compute_accuracy(self._network, test_loader)
+                
+                info = "Task {}, Epoch {}/{} => Main Loss {:.3f}, Routing Loss {:.3f}, Train_accy {:.2f}, Test_accy {:.2f}".format(
+                    self._cur_task,
+                    epoch + 1,
+                    epochs,
+                    losses / len(train_loader),
+                    routing_losses / len(train_loader),
+                    train_acc,
+                    test_acc,
+                )
+            else:
+                info = "Task {}, Epoch {}/{} => Main Loss {:.3f}, Routing Loss {:.3f}, Train_accy {:.2f}".format(
+                    self._cur_task,
+                    epoch + 1,
+                    epochs,
+                    losses / len(train_loader),
+                    routing_losses / len(train_loader),
+                    train_acc,
+                )
+            
             prog_bar.set_description(info)
             logging.info(info)
 
@@ -293,7 +320,14 @@ class iCaRLMoe(BaseLearner):
         # 初始化类别统计
         class_correct = [0] * self._total_classes
         class_total = [0] * self._total_classes
-        
+                # ===== 新增：在分类评估前先评估路由网络 =====
+        if self._cur_task > 0:  # 只有多任务时才评估路由
+            logging.info("开始路由网络评估...")
+            routing_stats = self.evaluate_routing_network(self.test_loader, phase="test")
+            
+            # 可选：基于路由性能进行分析
+            if routing_stats and routing_stats['overall_accuracy'] < 0.8:
+                logging.warning("路由性能较低，可能影响MoE效果")
         # 使用进度条显示评估过程
         progress_bar = tqdm(self.test_loader, desc="评估任务")
         for i, (_, inputs, targets) in enumerate(progress_bar):
@@ -474,6 +508,149 @@ class iCaRLMoe(BaseLearner):
         logging.info(f"\n总计参数数量: {total_params}")
         logging.info(f"{'='*50}\n")
 
+    
+    def evaluate_routing_network(self, data_loader, phase="test"):
+        """
+        独立的路由网络评估函数
+        :param data_loader: 数据加载器（训练集或测试集）
+        :param phase: 评估阶段，用于日志标识（"train" 或 "test"）
+        :return: 路由评估结果字典
+        """
+        if self._cur_task < 1:  # 只有多任务时才需要评估路由
+            logging.info(f"路由评估: 当前任务{self._cur_task}，需要至少2个任务")
+            return None
+        
+        if not hasattr(self._network.convnet, 'moe_layer'):
+            logging.info("路由评估: 未检测到MoE层")
+            return None
+        
+        self._network.eval()
+        
+        # 初始化统计
+        routing_stats = {
+            'phase': phase,
+            'total_samples': 0,
+            'correct_routing': 0,
+            'overall_accuracy': 0.0,
+            'task_wise_accuracy': {},
+            'expert_usage': {},
+            'confusion_matrix': None
+        }
+        
+        task_size = self.args["increment"]
+        all_predicted_tasks = []
+        all_true_tasks = []
+        
+        with torch.no_grad():
+            for i, (_, inputs, targets) in enumerate(data_loader):
+                inputs, targets = inputs.to(self._device), targets.to(self._device)
+                
+                # 计算路由目标（与训练时相同的逻辑）
+                routing_targets = self._compute_routing_targets(targets, task_size)
+                
+                # 前向传播
+                outputs = self._network(inputs, task_id=None)
+                gate_logits = outputs.get("gate_logits")
+                
+                if gate_logits is None:
+                    continue
+                
+                # 预测的任务ID
+                predicted_tasks = torch.argmax(gate_logits, dim=1)
+                
+                # 统计信息
+                batch_correct = (predicted_tasks == routing_targets).sum().item()
+                routing_stats['correct_routing'] += batch_correct
+                routing_stats['total_samples'] += len(targets)
+                
+                # 保存详细数据用于后续分析
+                all_predicted_tasks.extend(predicted_tasks.cpu().numpy())
+                all_true_tasks.extend(routing_targets.cpu().numpy())
+        
+        # 计算总体指标
+        if routing_stats['total_samples'] > 0:
+            routing_stats['overall_accuracy'] = (
+                routing_stats['correct_routing'] / routing_stats['total_samples']
+            )
+            
+            # 计算任务级别的准确率
+            all_predicted = np.array(all_predicted_tasks)
+            all_true = np.array(all_true_tasks)
+            
+            for task_id in range(self._cur_task + 1):
+                task_mask = all_true == task_id
+                if task_mask.any():
+                    task_acc = (all_predicted[task_mask] == all_true[task_mask]).mean()
+                    routing_stats['task_wise_accuracy'][f'task_{task_id}'] = task_acc
+            
+            # 计算专家使用分布
+            if len(all_predicted_tasks) > 0:
+                unique, counts = np.unique(all_predicted_tasks, return_counts=True)
+                total_predictions = len(all_predicted_tasks)
+                for expert_id in range(self._cur_task + 1):
+                    if expert_id in unique:
+                        usage = counts[unique == expert_id][0] / total_predictions
+                    else:
+                        usage = 0.0
+                    routing_stats['expert_usage'][f'expert_{expert_id}'] = usage
+        
+        # 打印评估结果
+        self._print_routing_evaluation(routing_stats)
+        
+        # 保存评估历史（可选）
+        self.routing_eval_history.append({
+            'task': self._cur_task,
+            'phase': phase,
+            'stats': routing_stats
+        })
+        
+        return routing_stats
+    
+    def _compute_routing_targets(self, targets, task_size):
+        """
+        计算路由目标（与训练时相同的逻辑）
+        """
+        routing_targets = torch.zeros_like(targets, device=self._device)
+        
+        # 新样本路由到当前专家
+        new_sample_mask = (targets >= self._known_classes)
+        routing_targets[new_sample_mask] = self._cur_task
+        
+        # 回放样本路由到对应专家
+        replay_mask = (targets < self._known_classes)
+        if replay_mask.any() and self._cur_task > 0:
+            task_origin = targets // task_size
+            task_origin = torch.clamp(task_origin, 0, self._cur_task - 1)
+            routing_targets[replay_mask] = task_origin[replay_mask]
+        
+        return routing_targets
+    
+    def _print_routing_evaluation(self, routing_stats):
+        """打印路由评估结果"""
+        if routing_stats['total_samples'] == 0:
+            return
+        
+        phase = routing_stats['phase']
+        accuracy_pct = routing_stats['overall_accuracy'] * 100
+        
+        logging.info(f"\n🎯 {phase.upper()}集路由网络评估:")
+        logging.info("-" * 50)
+        logging.info(f"总体路由准确率: {accuracy_pct:.2f}% "
+                    f"({routing_stats['correct_routing']}/{routing_stats['total_samples']})")
+        
+        # 任务级别准确率
+        if routing_stats['task_wise_accuracy']:
+            logging.info("\n任务级别路由准确率:")
+            for task_name, acc in routing_stats['task_wise_accuracy'].items():
+                logging.info(f"  {task_name}: {acc:.4f}")
+        
+        # 专家使用分布
+        if routing_stats['expert_usage']:
+            logging.info("\n专家使用分布:")
+            for expert_name, usage in routing_stats['expert_usage'].items():
+                logging.info(f"  {expert_name}: {usage:.4f}")
+        
+        logging.info("-" * 50)
 # ========== 辅助函数：知识蒸馏损失 ==========
 def _KD_loss(pred, soft, T):
     """
