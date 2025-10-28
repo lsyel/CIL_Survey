@@ -11,7 +11,7 @@ class MoELayer(nn.Module):
     通过将蒸馏损失整合到路由损失中，保持上层接口不变
     """
     def __init__(self, input_dim, expert_dim, num_experts, k=1,
-                 distill_weight=2, temperature=2.0):
+                 distill_weight=1, temperature=2.0):
         super(MoELayer, self).__init__()
         self.num_experts = num_experts
         self.k = k
@@ -29,7 +29,6 @@ class MoELayer(nn.Module):
         # 旧门控网络（用于蒸馏）
         self.old_gate = None
         self.old_num_experts = 0
-            
         # 保存旧门控权重用于专家扩展
         self._old_gate_weights = None
 
@@ -83,9 +82,6 @@ class MoELayer(nn.Module):
             else:
                 total_routing_loss = routing_loss
             
-            # 记录统计信息
-            if self.distill_loss_history is not None and distill_loss > 0:
-                self.distill_loss_history.append(distill_loss.item())
         
         # Top-k 选择
         topk_vals, topk_idxs = torch.topk(gate_logits, self.k, dim=1)
@@ -139,7 +135,6 @@ class MoELayer(nn.Module):
         distill_loss = F.kl_div(current_probs, old_probs, reduction='batchmean') * (self.temperature ** 2)
         return distill_loss
 
-
     def expand_experts(self, new_num_experts):
         """扩展专家（保存旧门控网络用于蒸馏）"""
         if new_num_experts <= self.num_experts:
@@ -165,12 +160,7 @@ class MoELayer(nn.Module):
         
         print(f"✅ MoE expanded to {new_num_experts} experts with gate distillation.")
         
-        # 重置统计
-        if self.print_prob > 0:
-            self.routing_acc_history = []
-            self.expert_usage_history = []
-            self.distill_loss_history = []
-            self.task_routing_acc = {}
+
 
     def _add_new_experts(self, old_num, new_num_experts, input_dim, output_dim, device):
         """添加新专家（保持不变）"""
@@ -255,4 +245,3 @@ class MoELayer(nn.Module):
                     new_gate[-1].bias.data[i].add_(
                         torch.randn_like(avg_bias) * noise_scale
                     )
-
