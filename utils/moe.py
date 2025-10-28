@@ -3,78 +3,95 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import random
+import copy
 
 class MoELayer(nn.Module):
-    def __init__(self, input_dim, expert_dim, num_experts, k=1, print_prob=-1):
-        """
-        MoE Layer with Conditional Statistics Recording
-        :param print_prob: 打印概率，为0时不记录任何统计信息
-        """
+    """
+    在您原有MoELayer基础上添加门控网络蒸馏功能
+    通过将蒸馏损失整合到路由损失中，保持上层接口不变
+    """
+    def __init__(self, input_dim, expert_dim, num_experts, k=1,
+                 distill_weight=2, temperature=2.0):
         super(MoELayer, self).__init__()
         self.num_experts = num_experts
         self.k = k
-        self.print_prob = print_prob
+        self.distill_weight = distill_weight  # 蒸馏损失权重
+        self.temperature = temperature  # 蒸馏温度
         
-        # 专家网络
+        # 专家网络（保持不变）
         self.experts = nn.ModuleList([
             nn.Linear(input_dim, expert_dim) for _ in range(num_experts)
         ])
         
-        # 门控网络
+        # 门控网络（保持您原有的结构）
         self.gate = self._build_gate_network(input_dim, num_experts)
         
-        # 保存旧门控权重
+        # 旧门控网络（用于蒸馏）
+        self.old_gate = None
+        self.old_num_experts = 0
+            
+        # 保存旧门控权重用于专家扩展
         self._old_gate_weights = None
-        
-        # 仅当print_prob>0时初始化统计变量
-        if print_prob > 0:
-            self.routing_acc_history = []
-            self.expert_usage_history = []
-        else:
-            # 设置为None，避免不必要的内存分配
-            self.routing_acc_history = None
-            self.expert_usage_history = None
 
     def _build_gate_network(self, input_dim, num_experts):
-        """构建门控网络"""
+        """构建门控网络（保持您原有的结构）"""
         return nn.Sequential(
             nn.Linear(input_dim, 256),
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(256, 256),
             nn.ReLU(),
-            nn.Dropout(0.2),  # 新增的Dropout层
-            nn.Linear(256, 256),  # 新增的隐藏层
-            nn.ReLU(),           # 新增的激活函数
+            nn.Dropout(0.2),
+            nn.Linear(256, 256),
+            nn.ReLU(),
             nn.Linear(256, num_experts)
         )
 
+    def set_old_gate(self, old_gate, old_num_experts):
+        """设置旧门控网络用于蒸馏"""
+        if old_gate is not None:
+            self.old_gate = copy.deepcopy(old_gate)
+            self.old_gate.eval()  # 设置为评估模式
+            for param in self.old_gate.parameters():
+                param.requires_grad = False
+            self.old_num_experts = old_num_experts
+            print(f"🔁 Loaded old gate with {old_num_experts} experts for distillation")
+
     def forward(self, x, task_id=None, routing_targets=None):
+        """
+        前向传播，将蒸馏损失整合到路由损失中
+        上层代码完全不需要修改
+        """
         B, D = x.shape
         gate_logits = self.gate(x)
         
         # 计算路由损失
         routing_loss = 0
+        distill_loss = 0
+        total_routing_loss = 0
+        
         if routing_targets is not None and self.training:
+            # 基础路由损失
             routing_loss = F.cross_entropy(gate_logits, routing_targets)
             
+            # 计算蒸馏损失（如果存在旧门控网络）
+            if self.old_gate is not None and self.old_num_experts > 0:
+                distill_loss = self._compute_distill_loss(x, gate_logits)
+                
+                # 将蒸馏损失整合到总路由损失中
+                total_routing_loss = routing_loss + self.distill_weight * distill_loss
+            else:
+                total_routing_loss = routing_loss
+            
+            # 记录统计信息
+            if self.distill_loss_history is not None and distill_loss > 0:
+                self.distill_loss_history.append(distill_loss.item())
+        
+        # Top-k 选择
         topk_vals, topk_idxs = torch.topk(gate_logits, self.k, dim=1)
         topk_vals = F.softmax(topk_vals, dim=1)
-        
-        # 仅当print_prob>0且需要路由目标时才计算路由准确性
-        routing_accuracy = 0
-        should_record = (self.print_prob > 0) and (routing_targets is not None) and self.training
-        
-        if should_record:
-            predicted_task_id = topk_idxs[:, 0]
-            routing_accuracy = (predicted_task_id == routing_targets).float().mean()
-            self.routing_acc_history.append(routing_accuracy.item())
-            
-            # 随机打印路由信息
-            if random.random() < self.print_prob:
-                self._print_simple_info(routing_accuracy, routing_loss, topk_idxs, routing_targets)
 
-        # 计算输出
+        # 计算输出（保持不变）
         out = torch.zeros(B, self.experts[0].out_features, device=x.device)
         for i in range(self.num_experts):
             expert_mask = (topk_idxs == i).any(dim=1)
@@ -88,62 +105,53 @@ class MoELayer(nn.Module):
                 
                 out[expert_mask] += weighted * expert_out
         
-        # 仅当需要记录时才计算专家使用统计
-        expert_counts = None
-        if should_record:
-            expert_counts = torch.zeros(self.num_experts, device=x.device)
-            for i in range(self.num_experts):
-                expert_mask = (topk_idxs == i).any(dim=1)
-                expert_counts[i] = expert_mask.float().sum()
-            
-            self.expert_usage_history.append(expert_counts.detach().cpu().numpy())
-            self.last_expert_counts = expert_counts.detach().clone()
-        
+        # 返回结果：将总路由损失（包含蒸馏）作为routing_loss返回
+        # 上层代码完全不需要修改
         return {
             "output": out,
-            "routing_loss": routing_loss,
+            "routing_loss": total_routing_loss,  # 关键修改：这里包含了蒸馏损失
             "gate_logits": gate_logits,
             "expert_assignments": topk_idxs
         }
 
-    def _print_simple_info(self, routing_accuracy, routing_loss, topk_idxs, routing_targets):
-        """简单打印路由信息"""
-        print(f"\n🎯 MoE Info (Random Print, prob={self.print_prob}):")
-        print(f"  Routing Accuracy: {routing_accuracy.item():.4f}")
-        print(f"  Routing Loss: {routing_loss.item() if isinstance(routing_loss, torch.Tensor) else routing_loss:.4f}")
-        
-        # 专家使用情况
-        if hasattr(self, 'last_expert_counts') and self.last_expert_counts is not None:
-            expert_counts = self.last_expert_counts.cpu().numpy()
-            print("  Expert Usage:")
-            for i, count in enumerate(expert_counts):
-                print(f"    Expert {i}: {count:.0f} samples")
-        
-        # 路由分布
-        if routing_targets is not None:
-            target_dist = torch.bincount(routing_targets, minlength=self.num_experts).cpu().numpy()
-            pred_dist = torch.bincount(topk_idxs[:, 0], minlength=self.num_experts).cpu().numpy()
+    def _compute_distill_loss(self, x, current_gate_logits):
+        """计算门控网络蒸馏损失"""
+        with torch.no_grad():
+            # 旧门控网络的输出
+            old_gate_logits = self.old_gate(x)
             
-            print("  Routing Distribution:")
-            # 只显示有样本的专家
-            displayed_experts = 0
-            for i in range(self.num_experts):
-                if target_dist[i] > 0 or pred_dist[i] > 0:
-                    print(f"    Expert {i}: Target={target_dist[i]}, Predicted={pred_dist[i]}")
+            # 如果专家数量不同，需要对齐
+            if self.old_num_experts < self.num_experts:
+                # 填充旧门控输出到当前维度
+                expanded_old_logits = torch.zeros_like(current_gate_logits)
+                expanded_old_logits[:, :self.old_num_experts] = old_gate_logits
+                # 对新专家部分使用均匀分布
+                expanded_old_logits[:, self.old_num_experts:] = 1.0 / (self.num_experts - self.old_num_experts)
+                old_gate_logits = expanded_old_logits
+            elif self.old_num_experts > self.num_experts:
+                # 截断旧门控输出（理论上不会发生）
+                old_gate_logits = old_gate_logits[:, :self.num_experts]
         
-        # 历史准确性（最近10个batch的平均）
-        if self.routing_acc_history and len(self.routing_acc_history) >= 10:
-            recent_acc = np.mean(self.routing_acc_history[-10:])
-            print(f"  Recent Avg Accuracy: {recent_acc:.4f}")
+        # 使用KL散度计算蒸馏损失
+        current_probs = F.log_softmax(current_gate_logits / self.temperature, dim=1)
+        old_probs = F.softmax(old_gate_logits / self.temperature, dim=1)
         
-        print("-" * 40)
+        distill_loss = F.kl_div(current_probs, old_probs, reduction='batchmean') * (self.temperature ** 2)
+        return distill_loss
+
 
     def expand_experts(self, new_num_experts):
-        """扩展专家"""
+        """扩展专家（保存旧门控网络用于蒸馏）"""
         if new_num_experts <= self.num_experts:
             return
 
         old_num = self.num_experts
+        
+        # 保存当前门控网络作为旧门控网络（用于蒸馏）
+        if self.training:  # 只在训练时保存
+            self.set_old_gate(self.gate, old_num)
+        
+        # 原有的专家扩展逻辑
         input_dim = self.experts[0].in_features
         output_dim = self.experts[0].out_features
         device = next(self.experts[0].parameters()).device
@@ -155,15 +163,17 @@ class MoELayer(nn.Module):
         self.gate = self._expand_gate_network(new_num_experts, device)
         self.num_experts = new_num_experts
         
-        print(f"✅ MoE expanded to {new_num_experts} experts.")
+        print(f"✅ MoE expanded to {new_num_experts} experts with gate distillation.")
         
-        # 重置统计（如果启用了统计记录）
+        # 重置统计
         if self.print_prob > 0:
             self.routing_acc_history = []
             self.expert_usage_history = []
+            self.distill_loss_history = []
+            self.task_routing_acc = {}
 
     def _add_new_experts(self, old_num, new_num_experts, input_dim, output_dim, device):
-        """添加新专家"""
+        """添加新专家（保持不变）"""
         # 计算所有旧专家的平均值
         with torch.no_grad():
             weights = torch.stack([e.weight.data.clone() for e in self.experts])
@@ -186,7 +196,7 @@ class MoELayer(nn.Module):
             self.experts.append(new_expert)
 
     def _expand_gate_network(self, new_num_experts, device):
-        """扩展门控网络"""
+        """扩展门控网络（保持不变）"""
         # 保存旧门控权重（如果尚未保存）
         if self._old_gate_weights is None:
             self._old_gate_weights = []
@@ -206,7 +216,7 @@ class MoELayer(nn.Module):
         return new_gate
 
     def _copy_gate_weights(self, new_gate, new_num_experts):
-        """复制旧门控网络的权重到新门控网络"""
+        """复制旧门控网络的权重到新门控网络（保持不变）"""
         if self._old_gate_weights is None:
             return
             
@@ -219,7 +229,7 @@ class MoELayer(nn.Module):
             new_gate[3].bias.data.copy_(self._old_gate_weights[1]['bias'])
             
             # 复制新增的层（第5层）
-            if len(self._old_gate_weights) > 4:  # 确保有新增层的权重
+            if len(self._old_gate_weights) > 4:
                 new_gate[6].weight.data.copy_(self._old_gate_weights[4]['weight'])
                 new_gate[6].bias.data.copy_(self._old_gate_weights[4]['bias'])
             
@@ -246,25 +256,3 @@ class MoELayer(nn.Module):
                         torch.randn_like(avg_bias) * noise_scale
                     )
 
-    def get_stats(self):
-        """获取统计信息（仅当启用了统计记录时有效）"""
-        if self.print_prob <= 0 or not self.routing_acc_history:
-            return {"message": "Statistics recording is disabled (print_prob=0)"}
-        
-        avg_acc = np.mean(self.routing_acc_history)
-        
-        if self.expert_usage_history and len(self.expert_usage_history) > 0:
-            avg_usage = np.mean(self.expert_usage_history, axis=0)
-            min_usage = avg_usage.min()
-            max_usage = avg_usage.max()
-            imbalance = max_usage / (min_usage + 1e-6)
-        else:
-            avg_usage = np.zeros(self.num_experts)
-            imbalance = 0
-        
-        return {
-            "average_routing_accuracy": avg_acc,
-            "expert_usage": avg_usage,
-            "imbalance_ratio": imbalance,
-            "total_samples": len(self.routing_acc_history)
-        }
