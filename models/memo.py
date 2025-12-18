@@ -36,7 +36,7 @@ class MEMO(BaseLearner):
                 self._network.TaskAgnosticExtractor.eval()
                 for param in self._network.TaskAgnosticExtractor.parameters():
                     param.requires_grad = False
-        
+        super().after_task()
         logging.info('Exemplar size: {}'.format(self.exemplar_size))
 
     def incremental_train(self, data_manager):

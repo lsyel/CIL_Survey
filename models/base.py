@@ -23,7 +23,7 @@ class BaseLearner(object):
         self._network = None
         self._old_network = None
         self._data_memory, self._targets_memory = np.array([]), np.array([])
-        self.topk = 1
+        self.topk = 3
 
         self._memory_size = args["memory_size"]
         self._memory_per_class = args.get("memory_per_class", None)
@@ -893,7 +893,7 @@ class BaseLearner(object):
         
         # 2. 计算平均准确率
         avg_accuracy = np.mean(accuracies) if accuracies else 0.5
-        factor = self.args['replay_factor']
+        factor = self.args.get('replay_factor', 0.0)
         # 3. 计算权重
         for class_idx, accuracy in enumerate(accuracies):
             # 计算与平均准确率的偏差
@@ -902,7 +902,7 @@ class BaseLearner(object):
             # 使用平滑函数计算权重
             # 当准确率接近平均值时，权重接近1.0
             # 当准确率偏离平均值时，权重在0.9-1.1之间变化
-            weight = 1.0 - factor * np.tanh(deviation * 2)
+            weight = 1.0 + factor * np.tanh(deviation * 2)
             
             class_weights[class_idx] = weight
             logging.info(f"Class {class_idx}: Accuracy={accuracy:.4f}, Weight={weight:.4f}")

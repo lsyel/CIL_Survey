@@ -47,9 +47,9 @@ def setup_parser():
     parser.add_argument('--init_weight_decay', type=float, default=0.0005)
     
     # update
-    parser.add_argument('--epochs', type=int, default=20)
+    parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--lrate', type=float, default=0.1)
-    parser.add_argument('--milestones', type=list, default=[15])
+    parser.add_argument('--milestones', type=list, default=[40])
     parser.add_argument('--lrate_decay', type=float, default=0.1)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--weight_decay', type=float, default=2e-4)

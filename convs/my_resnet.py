@@ -13,6 +13,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from utils.moe import MoELayer
+from utils.improve_moe import EnhancedMoELayer
 
 def conv3x3(in_planes, out_planes, stride=1):
     return nn.Conv2d(
@@ -188,6 +189,14 @@ class ResNet(nn.Module):
                 num_experts=moe_experts,
                 k=1
             )
+            # 使用增强的MoE层
+            # self.moe_layer = EnhancedMoELayer(
+            #     input_dim=self.out_dim,
+            #     expert_dim=self.out_dim,
+            #     num_experts=moe_experts,
+            #     k=1,
+            #     expert_type='enhanced_v1',
+            # )
 
     def _make_layer(self, block, planes, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)

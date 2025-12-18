@@ -27,7 +27,7 @@ class MoELayer(nn.Module):
         self.gate = self._build_gate_network(input_dim, num_experts)
         
         # 旧门控网络（用于蒸馏）
-        self.old_gate = None
+        self.old_gate = self.gate
         self.old_num_experts = 0
         # 保存旧门控权重用于专家扩展
         self._old_gate_weights = None
@@ -79,8 +79,11 @@ class MoELayer(nn.Module):
                 
                 # 将蒸馏损失整合到总路由损失中
                 total_routing_loss = routing_loss + self.distill_weight * distill_loss
+                if random.random() < 0.1:
+                    print(f"total_routing_loss: {total_routing_loss.item():.4f}, routing_loss: {routing_loss.item():.4f}, distill_loss: {distill_loss.item():.4f}")
             else:
                 total_routing_loss = routing_loss
+                # print(f"Routing loss: {routing_loss.item():.4f}")
             
         
         # Top-k 选择
@@ -121,17 +124,24 @@ class MoELayer(nn.Module):
                 # 填充旧门控输出到当前维度
                 expanded_old_logits = torch.zeros_like(current_gate_logits)
                 expanded_old_logits[:, :self.old_num_experts] = old_gate_logits
-                # 对新专家部分使用均匀分布
-                expanded_old_logits[:, self.old_num_experts:] = 1.0 / (self.num_experts - self.old_num_experts)
+                
+                # 对新专家部分使用中性 Logits (0)，这对应于 Softmax 后的均匀概率。
+                # 这里保持为0即可，因为 expanded_old_logits 已经初始化为0。
+                # expanded_old_logits[:, self.old_num_experts:] = 0.0 # 理论上可以省略，但写出来更清晰
+                
                 old_gate_logits = expanded_old_logits
             elif self.old_num_experts > self.num_experts:
-                # 截断旧门控输出（理论上不会发生）
+                # 截断旧门控输出（保持不变）
                 old_gate_logits = old_gate_logits[:, :self.num_experts]
         
-        # 使用KL散度计算蒸馏损失
+        # -----------------------------------------------------------
+        # 使用KL散度计算蒸馏损失（保持不变，注意温度 T 的应用）
+        # LogSoftmax/Softmax 应该作用在完整的 Logits 向量上
+        # -----------------------------------------------------------
         current_probs = F.log_softmax(current_gate_logits / self.temperature, dim=1)
         old_probs = F.softmax(old_gate_logits / self.temperature, dim=1)
         
+        # 注意：F.kl_div 的 reduction='batchmean' 默认是对所有元素求和后除以 batch size。
         distill_loss = F.kl_div(current_probs, old_probs, reduction='batchmean') * (self.temperature ** 2)
         return distill_loss
 
@@ -141,10 +151,9 @@ class MoELayer(nn.Module):
             return
 
         old_num = self.num_experts
-        
+        self._freeze_experts(old_num)
         # 保存当前门控网络作为旧门控网络（用于蒸馏）
-        if self.training:  # 只在训练时保存
-            self.set_old_gate(self.gate, old_num)
+        self.set_old_gate(self.gate, old_num)
         
         # 原有的专家扩展逻辑
         input_dim = self.experts[0].in_features
@@ -159,7 +168,7 @@ class MoELayer(nn.Module):
         self.num_experts = new_num_experts
         
         print(f"✅ MoE expanded to {new_num_experts} experts with gate distillation.")
-        
+        self.distill_weight+=0.0
 
 
     def _add_new_experts(self, old_num, new_num_experts, input_dim, output_dim, device):
@@ -245,3 +254,16 @@ class MoELayer(nn.Module):
                     new_gate[-1].bias.data[i].add_(
                         torch.randn_like(avg_bias) * noise_scale
                     )
+    def _freeze_experts(self, num_to_freeze):
+            """
+            冻结前 k 个专家的参数
+            """
+            for i in range(num_to_freeze):
+                expert = self.experts[i]
+                # 设为评估模式 (影响 Dropout/BatchNorm)
+                expert.eval() 
+                # 关闭梯度计算
+                for param in expert.parameters():
+                    param.requires_grad = False
+            
+            print(f"🔒 Frozen {num_to_freeze} experts.")

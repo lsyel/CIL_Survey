@@ -188,6 +188,10 @@ class iCaRLMoe(BaseLearner):
 
     def _update_representation(self, train_loader, test_loader, optimizer, scheduler):
         prog_bar = tqdm(range(epochs))
+        clf_loss_weight = self.args.get("clf_loss_weight", 1.0)+(0.0 * (self._cur_task))
+        kd_loss_weight = self.args.get("kd_loss_weight", 1.0)+(0.0 * (self._cur_task))
+        routing_loss_weight = self.args.get("routing_loss_weight", 0.5) + (0.0 * (self._cur_task))
+        logging.info(f"Clf_Loss_Weight:{clf_loss_weight} Kd_Loss_Weight:{kd_loss_weight} Routing_Loss_Weight:{routing_loss_weight}")
         for _, epoch in enumerate(prog_bar):
             self._network.train()
             losses = 0.0
@@ -247,10 +251,9 @@ class iCaRLMoe(BaseLearner):
                     loss_kd = 0
                 
                 # 主损失（分类 + 蒸馏）
-                main_loss = 2 * loss_clf + loss_kd
+                main_loss =loss_clf + loss_kd
                 
                 # 路由损失权重
-                routing_loss_weight = 0.3 * (0.9 ** self._cur_task)
                 weighted_routing_loss = routing_loss_weight * routing_loss
                 
                 # 总损失
