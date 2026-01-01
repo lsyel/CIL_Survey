@@ -24,9 +24,9 @@ init_milestones = [40]
 init_lr_decay = 0.1
 init_weight_decay = 0.0005
 
-epochs = 50
+epochs = 20
 lrate = 0.1
-milestones = [40]
+milestones = [15]
 lrate_decay = 0.1
 batch_size = 128
 weight_decay = 2e-4

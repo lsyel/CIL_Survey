@@ -27,7 +27,7 @@ def setup_parser():
     parser.add_argument('--init_cls', '-init', type=int, default=10)
     parser.add_argument('--increment', '-incre', type=int, default=10)
     parser.add_argument('--model_name','-model', type=str, default=None, required=True)
-    parser.add_argument('--convnet_type','-net', type=str, default='resnet32')
+    parser.add_argument('--convnet_type','-net', type=str, default='resnet18')
     parser.add_argument('--prefix','-p',type=str, help='exp type', default='benchmark', choices=['benchmark', 'fair', 'auc'])
     parser.add_argument('--device','-d', nargs='+', type=int, default=[0,1,2,3])
     parser.add_argument('--debug', action="store_true")
@@ -47,9 +47,9 @@ def setup_parser():
     parser.add_argument('--init_weight_decay', type=float, default=0.0005)
     
     # update
-    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--epochs', type=int, default=20)
     parser.add_argument('--lrate', type=float, default=0.1)
-    parser.add_argument('--milestones', type=list, default=[40])
+    parser.add_argument('--milestones', type=list, default=[15])
     parser.add_argument('--lrate_decay', type=float, default=0.1)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--weight_decay', type=float, default=2e-4)
