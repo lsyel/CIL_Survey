@@ -59,6 +59,9 @@ class WA_MoE(BaseLearner):
         logging.info("Exemplar size: {}".format(self.exemplar_size))
         super().after_task()
 
+        # =========== 👇 新增：保存模型调用 ===========
+        self._save_model()
+
     def incremental_train(self, data_manager):
         self._cur_task += 1
         self._total_classes = self._known_classes + data_manager.get_task_size(
@@ -320,7 +323,7 @@ class WA_MoE(BaseLearner):
                 )
             prog_bar.set_description(info)
             logging.info(info)
-    
+
     def eval_task(self, save_conf=False):
         """评估模型性能，并计算每个类别的准确率"""
         cnn_pred_list, cnn_target_list, cnn_logits_list = [], [], []
@@ -762,7 +765,7 @@ class WA_MoE(BaseLearner):
         logging.info(f"\n🎯 {phase.upper()}集路由网络评估:")
         logging.info("-" * 50)
         logging.info(f"总体路由准确率: {accuracy_pct:.2f}% "
-                    f"({routing_stats['correct_routing']}/{routing_stats['total_samples']})")
+                     f"({routing_stats['correct_routing']}/{routing_stats['total_samples']})")
         
         # 任务级别准确率
         if routing_stats['task_wise_accuracy']:
@@ -777,6 +780,77 @@ class WA_MoE(BaseLearner):
                 logging.info(f"  {expert_name}: {usage:.4f}")
         
         logging.info("-" * 50)
+
+    # =========== 👇 新增：保存模型相关方法 ===========
+    def _save_model(self):
+        # 确保保存目录存在
+        save_dir = "./pth"
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+            
+        model_path = os.path.join(save_dir, f"task_{self._cur_task}_model.pth")
+        
+        # 收集所有参数信息
+        param_info = []
+        for name, param in self._network.named_parameters():
+            param_info.append({
+                'name': name,
+                'shape': tuple(param.shape),
+                'dtype': str(param.dtype),
+                'mean': param.mean().item(),
+                'std': param.std().item(),
+                'min': param.min().item(),
+                'max': param.max().item()
+            })
+        
+        # 保存模型状态
+        # 尝试获取 MoE 层的状态，如果不存在（例如单任务模型）则忽略
+        moe_layer_state = None
+        moe_experts = 0
+        if hasattr(self._network.convnet, 'moe_layer'):
+             moe_layer_state = self._network.convnet.moe_layer.state_dict()
+             moe_experts = self._network.convnet.moe_layer.num_experts
+
+        model_state = {
+            'network_state_dict': self._network.state_dict(),
+            'moe_layer_state': moe_layer_state,
+            'total_classes': self._total_classes,
+            'known_classes': self._known_classes,
+            'cur_task': self._cur_task,
+            'data_memory': self._data_memory,
+            'targets_memory': self._targets_memory,
+            'args': self.args,
+            'param_info': param_info,  # 添加参数信息
+            'moe_experts': moe_experts  # 新增
+        }
+        
+        torch.save(model_state, model_path)
+        
+        # 打印参数摘要 (可选)
+        self._log_param_summary(param_info, "保存模型参数")
+        
+        logging.info(f"模型已保存到 {model_path}")
+        return model_path
+
+    def _log_param_summary(self, param_info, title):
+        """记录参数摘要信息"""
+        logging.info(f"\n{'='*50}")
+        logging.info(f"{title} - 参数摘要")
+        logging.info(f"{'参数名称':<40} | {'形状':<20} | {'均值':<10} | {'标准差':<10} | {'最小值':<10} | {'最大值':<10}")
+        logging.info(f"{'-'*100}")
+        
+        for info in param_info:
+            logging.info(
+                f"{info['name']:<40} | {str(info['shape']):<20} | "
+                f"{info['mean']:>10.6f} | {info['std']:>10.6f} | "
+                f"{info['min']:>10.6f} | {info['max']:>10.6f}"
+            )
+        
+        # 添加统计信息
+        total_params = sum(np.prod(info['shape']) for info in param_info)
+        logging.info(f"\n总计参数数量: {total_params}")
+        logging.info(f"{'='*50}\n")
+    # ===============================================
 
 def _KD_loss(pred, soft, T):
     pred = torch.log_softmax(pred / T, dim=1)
