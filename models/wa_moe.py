@@ -14,7 +14,7 @@ from utils.inc_net import IncrementalNet
 from utils.toolkit import target2onehot, tensor2numpy
 import pandas as pd
 import json
-
+import matplotlib.pyplot as plt
 EPSILON = 1e-8
 
 # 超参数
@@ -384,12 +384,13 @@ class WA_MoE(BaseLearner):
         logging.info(f"{'类别':<15} | {'样本数':<8} | {'正确数':<8} | {'准确率':<8}")
         logging.info("-" * 50)
         
-        # 获取类别标签映射（如果有）
-        if hasattr(self, 'data_manager') and hasattr(self.data_manager, 'class_order'):
-            class_labels = self.data_manager.class_order
-        else:
-            class_labels = [str(i) for i in range(self._total_classes)]
-        
+        # # 获取类别标签映射（如果有）
+        # if hasattr(self, 'data_manager') and hasattr(self.data_manager, 'class_order'):
+        #     class_labels = self.data_manager.class_order
+        # else:
+        #     class_labels = [str(i) for i in range(self._total_classes)]
+        from utils.data_manager import shuffled_class_order
+        class_labels = shuffled_class_order[:self._total_classes]
         # 计算平均准确率
         total_acc = 0.0
         valid_classes = 0
@@ -416,13 +417,39 @@ class WA_MoE(BaseLearner):
         if save_conf:
             # 保存混淆矩阵供后续分析
             confusion = confusion_matrix(cnn_target_all, cnn_pred_all)
-            np.save(os.path.join(self.args["logfilename"], f"confusion_task_{self._cur_task}.npy"), confusion)
             
-            # 保存预测结果
-            np.save(os.path.join(self.args["logfilename"], "cnn_pred.npy"), cnn_pred_all)
-            np.save(os.path.join(self.args["logfilename"], "cnn_target.npy"), cnn_target_all)
-            np.save(os.path.join(self.args["logfilename"], "cnn_logits.npy"), cnn_logits_all)
+            # 保存原始数据
+            np.save(os.path.join(self.args["logfilename"], 
+                                f"confusion_wa_moe_task_{self._cur_task}.npy"), 
+                    confusion)
+                        # === 加入这几行 ===
+            plt.rcParams['font.sans-serif'] = ['WenQuanYi Zen Hei']
+            plt.rcParams['axes.unicode_minus'] = False
+            # 保存可视化图片
+            plt.figure(figsize=(10, 8))
+            plt.imshow(confusion, cmap='Blues', interpolation='nearest')
+            tick_marks = np.arange(len(class_labels))
+            plt.xticks(tick_marks, class_labels, rotation=45, fontsize=12)
+            plt.yticks(tick_marks, class_labels, rotation=45,fontsize=12)
+            # 添加数值标注
+            for i in range(confusion.shape[0]):
+                for j in range(confusion.shape[1]):
+                    plt.text(j, i, str(confusion[i, j]),
+                            horizontalalignment='center',
+                            verticalalignment='center',
+                            fontsize=12)
+            
+            plt.colorbar()
+            plt.xlabel('预测类别', fontsize=14)
+            plt.ylabel('真实类别', fontsize=14)
+            # plt.title(f'任务 {self._cur_task} 混淆矩阵', fontsize=16)
 
+            # 调整布局并保存
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.args["logfilename"],
+                                    f"confusion_wa_moe_task_{self._cur_task}.png"),
+                        dpi=300, bbox_inches='tight')
+            plt.close()
         return cnn_accy, nme_accy
 
     def _compute_accuracy(self, model, loader):

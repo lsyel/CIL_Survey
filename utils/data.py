@@ -145,7 +145,7 @@ class USTC2016:
     ]
     
     class_order = None  # 将在download_data中初始化
-    
+    shuffled_class_order = None  # 新增：随机打乱后的类顺序
     def __init__(self):
         self.root = "./data"  # 数据集根目录
         self.train_data = None

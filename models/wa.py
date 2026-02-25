@@ -13,6 +13,7 @@ import pandas as pd
 import json
 import os
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, f1_score, recall_score, precision_score
+import matplotlib.pyplot as plt
 
 EPSILON = 1e-8
 
@@ -96,9 +97,46 @@ class WA(BaseLearner):
         all_preds = np.array(all_preds)
         all_targets = np.array(all_targets)
         all_logits = np.vstack(all_logits)
-        
+        self._compute_confustion_then_save(all_preds, all_targets)
         return self._compute_detailed_metrics(all_preds, all_targets, all_logits)
-    
+    def _compute_confustion_then_save(self, y_pred, y_true):
+        from utils.data_manager import shuffled_class_order
+        class_labels = shuffled_class_order[:self._total_classes]
+        confusion = confusion_matrix(y_true, y_pred)
+        
+        # 保存原始数据
+        np.save(os.path.join(self.args["logfilename"], 
+                            f"confusion_wa_moe_task_{self._cur_task}.npy"), 
+                confusion)
+                    # === 加入这几行 ===
+        plt.rcParams['font.sans-serif'] = ['WenQuanYi Zen Hei']
+        plt.rcParams['axes.unicode_minus'] = False
+        # 保存可视化图片
+        plt.figure(figsize=(10, 8))
+        plt.imshow(confusion, cmap='Blues', interpolation='nearest')
+        tick_marks = np.arange(len(class_labels))
+        plt.xticks(tick_marks, class_labels, rotation=45, fontsize=12)
+        plt.yticks(tick_marks, class_labels, rotation=45,fontsize=12)
+        # 添加数值标注
+        for i in range(confusion.shape[0]):
+            for j in range(confusion.shape[1]):
+                plt.text(j, i, str(confusion[i, j]),
+                        horizontalalignment='center',
+                        verticalalignment='center',
+                        fontsize=12)
+        
+        plt.colorbar()
+        plt.xlabel('预测类别', fontsize=14)
+        plt.ylabel('真实类别', fontsize=14)
+        # plt.title(f'任务 {self._cur_task} 混淆矩阵', fontsize=16)
+
+        # 调整布局并保存
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.args["logfilename"],
+                                f"confusion_wa_task_{self._cur_task}.png"),
+                    dpi=300, bbox_inches='tight')
+        plt.close()
+        return
     def _compute_detailed_metrics(self, y_pred, y_true, y_logits):
         """计算详细的性能指标"""
         metrics = {}

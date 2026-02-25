@@ -134,7 +134,7 @@ def _train(args):
             cnn_accy, nme_accy = model.eval_task(save_conf=True)
             no_nme = True if nme_accy is None else False
         else:
-            cnn_accy, nme_accy = model.eval_task(save_conf=False)
+            cnn_accy, nme_accy = model.eval_task(save_conf=True)
         # 执行任务结束后的操作
         model.after_task()
         

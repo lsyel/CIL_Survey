@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from utils.data import iCIFAR10, iCIFAR100, iImageNet100, iImageNet1000,USTC2016
 
-
+global shuffled_class_order
 class DataManager(object):
     def __init__(self, dataset_name, shuffle, seed, init_cls, increment):
         self.dataset_name = dataset_name
@@ -173,7 +173,8 @@ class DataManager(object):
         
         # 创建打乱后的类别标签列表
         shuffled_labels = [original_class_labels[i] for i in order]
-        
+        global shuffled_class_order
+        shuffled_class_order = shuffled_labels
         # 输出打乱后的类别标签
         logging.info("打乱后的类别标签:")
         for i, label in enumerate(shuffled_labels):
